@@ -3,6 +3,7 @@ const prisma = require('../lib/prisma')
 const { requireAuth } = require('../middleware/auth')
 const { verifyTitle } = require('../lib/oracle')
 const { buildValuation } = require('../lib/valuation')
+const blockchain = require('../lib/blockchain')
 
 const router = Router()
 
@@ -30,6 +31,8 @@ function serializeListing(listing) {
     titleStatus: listing.titleStatus,
     titleRejectionReason: listing.titleRejectionReason,
     ownerId: listing.ownerId,
+    contractAddress: listing.contractAddress,
+    onChainTxHash: listing.onChainTxHash,
     soldSqFt,
     availableSqFt: sellableSqFt - soldSqFt,
     excludedSqFt: Number(listing.areaSqFt) - sellableSqFt,
@@ -172,11 +175,31 @@ router.post('/', requireAuth, async (req, res) => {
     }, { timeout: 15000, maxWait: 10000 })
 
     const sellableSqFt = sellableCount * sqFtPerToken
+
+    // Register the property on-chain — best-effort. If the chain call fails
+    // (RPC hiccup, no gas, contract not deployed yet) the listing still
+    // exists and is fully usable off-chain; we just log it rather than
+    // failing a request Postgres already committed.
+    let onChainTxHash = null
+    if (listing.titleStatus === 'VERIFIED' && blockchain.isBlockchainConfigured) {
+      try {
+        onChainTxHash = await blockchain.tokenizeProperty(listing.id, sellableSqFt)
+        await prisma.listing.update({
+          where: { id: listing.id },
+          data: { contractAddress: blockchain.contractAddress, onChainTxHash },
+        })
+      } catch (err) {
+        console.error('On-chain tokenizeProperty failed:', err.message)
+      }
+    }
+
     res.status(201).json({
       ...serializeListing({ ...listing, plots: [] }),
       soldSqFt: 0,
       availableSqFt: sellableSqFt,
       excludedSqFt: Number(areaSqFt) - sellableSqFt,
+      contractAddress: onChainTxHash ? blockchain.contractAddress : null,
+      onChainTxHash,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to create listing', detail: err.message })
@@ -282,7 +305,21 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
       { timeout: 15000, maxWait: 10000 },
     )
 
-    res.status(201).json(result)
+    // Mint the buyer's sqft on-chain — best-effort, same reasoning as
+    // tokenizeProperty: the off-chain purchase already succeeded and is the
+    // source of truth for the demo, the chain call adds the public,
+    // tamper-proof record on top of it.
+    let onChainTxHash = null
+    if (blockchain.isBlockchainConfigured && buyer.walletAddress) {
+      try {
+        onChainTxHash = await blockchain.buyChunk(priceListing.id, buyer.walletAddress, result.sqFt)
+        await prisma.transaction.update({ where: { id: result.id }, data: { txHash: onChainTxHash } })
+      } catch (err) {
+        console.error('On-chain buyChunk failed:', err.message)
+      }
+    }
+
+    res.status(201).json({ ...result, txHash: onChainTxHash })
   } catch (err) {
     if (err.message === 'DOUBLE_SALE_PREVENTED') {
       return res.status(409).json({ error: 'Not enough sqft left in one or more selected chunks — someone else just bought part of it. Refresh and try again.' })
