@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import PageShell from '../components/layout/PageShell'
 import PlotGridMap from '../components/browse/PlotGridMap'
+import PlotPicker from '../components/browse/PlotPicker'
+import ValuationChart from '../components/browse/ValuationChart'
+import SqFtBar from '../components/browse/SqFtBar'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
@@ -11,9 +14,12 @@ export default function PropertyDetail() {
   const { user, getToken } = useAuth()
 
   const [listing, setListing] = useState(null)
+  const [valuation, setValuation] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error | notfound
   const [me, setMe] = useState(null)
-  const [selectedIds, setSelectedIds] = useState(new Set())
+
+  const [activePlot, setActivePlot] = useState(null)
+  const [cart, setCart] = useState(new Map()) // plotId -> { row, col, sqFt }
   const [paymentMethod, setPaymentMethod] = useState('upi')
   const [simulateFailure, setSimulateFailure] = useState(false)
   const [buyStatus, setBuyStatus] = useState('idle') // idle | processing | success | error
@@ -26,7 +32,8 @@ export default function PropertyDetail() {
         setListing(data)
         setStatus('ready')
       })
-      .catch(() => setStatus(status === 'loading' ? 'notfound' : 'error'))
+      .catch(() => setStatus((s) => (s === 'loading' ? 'notfound' : 'error')))
+    api.getValuation(id).then(setValuation).catch(() => {})
   }
 
   useEffect(() => {
@@ -45,37 +52,49 @@ export default function PropertyDetail() {
       .catch(() => setMe(null))
   }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selectedList = useMemo(() => Array.from(selectedIds), [selectedIds])
-  const totalPrice = listing ? Number(listing.pricePerToken) * selectedList.length : 0
+  const cartList = useMemo(() => Array.from(cart.entries()).map(([plotId, v]) => ({ plotId, ...v })), [cart])
+  const totalSqFt = cartList.reduce((sum, c) => sum + c.sqFt, 0)
+  const totalPrice = listing ? totalSqFt * Number(listing.pricePerSqFt) : 0
 
-  const togglePlot = (plot) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(plot.id)) next.delete(plot.id)
-      else next.add(plot.id)
+  const handlePick = (plot) => setActivePlot(plot)
+
+  const handleConfirmPick = (sqFt) => {
+    setCart((prev) => {
+      const next = new Map(prev)
+      const existing = next.get(activePlot.id)
+      next.set(activePlot.id, { row: activePlot.row, col: activePlot.col, sqFt: (existing?.sqFt || 0) + sqFt })
+      return next
+    })
+    setActivePlot(null)
+  }
+
+  const removeFromCart = (plotId) => {
+    setCart((prev) => {
+      const next = new Map(prev)
+      next.delete(plotId)
       return next
     })
   }
 
   const handleBuy = async () => {
-    if (selectedList.length === 0) return
+    if (cartList.length === 0) return
     setBuyStatus('processing')
     setBuyMessage('')
     try {
       const token = await getToken()
       await api.buyPlots(token, listing.id, {
-        plotIds: selectedList,
+        selections: cartList.map((c) => ({ plotId: c.plotId, sqFt: c.sqFt })),
         paymentMethod,
         simulatePaymentFailure: simulateFailure,
       })
       setBuyStatus('success')
-      setBuyMessage(`Purchased ${selectedList.length} chunk${selectedList.length > 1 ? 's' : ''} for ${formatINR(totalPrice)}.`)
-      setSelectedIds(new Set())
+      setBuyMessage(`Purchased ${totalSqFt.toFixed(0)} sqft for ${formatINR(totalPrice)}.`)
+      setCart(new Map())
       loadListing()
     } catch (err) {
       setBuyStatus('error')
       setBuyMessage(err.message)
-      loadListing() // refresh grid in case plots were sold by someone else
+      loadListing() // refresh grid in case chunks were sold by someone else
     }
   }
 
@@ -104,14 +123,13 @@ export default function PropertyDetail() {
   }
 
   const kycVerified = me?.kycStatus === 'VERIFIED'
-  const available = listing.totalTokens - listing.soldCount
 
   return (
     <PageShell>
       <section className="py-16 md:py-20">
         <div className="container-fluid">
           <p className="mono-label mb-4">{listing.city}</p>
-          <div className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="font-display text-4xl italic md:text-5xl">{listing.title}</h1>
               <p className="mt-3 max-w-xl font-sans text-sm font-light text-silver-low">{listing.description}</p>
@@ -122,36 +140,68 @@ export default function PropertyDetail() {
                 <p className="mono-label mt-1">Total Value</p>
               </div>
               <div>
-                <p className="font-mono text-lg text-white">
-                  {available}/{listing.totalTokens}
-                </p>
-                <p className="mono-label mt-1">Chunks Available</p>
+                <p className="font-mono text-lg text-white">{listing.areaSqFt.toLocaleString('en-IN')} sqft</p>
+                <p className="mono-label mt-1">Total Area</p>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_360px]">
-            <div className="map-shell h-[420px] md:h-[560px]">
-              <PlotGridMap listing={listing} plots={listing.plots} selectedIds={selectedIds} onToggle={togglePlot} />
+          <div className="glass mb-10 rounded-2xl p-5">
+            <SqFtBar soldSqFt={listing.soldSqFt} availableSqFt={listing.availableSqFt} excludedSqFt={listing.excludedSqFt} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_380px]">
+            <div className="flex flex-col gap-6">
+              <div className="map-shell h-[420px] md:h-[520px]">
+                <PlotGridMap listing={listing} plots={listing.plots} cart={cart} onPickPlot={handlePick} />
+              </div>
+
+              {valuation && (
+                <div className="glass rounded-2xl p-6">
+                  <ValuationChart valuation={valuation} />
+                </div>
+              )}
             </div>
 
             <div className="glass flex flex-col gap-6 rounded-2xl p-6 md:p-8">
               <div>
-                <p className="mono-label mb-2">Price per Chunk</p>
-                <p className="font-display text-3xl italic text-white">{formatINR(listing.pricePerToken)}</p>
+                <p className="mono-label mb-2">Price per sqft</p>
+                <p className="font-display text-3xl italic text-white">{formatINR(listing.pricePerSqFt)}</p>
+                <p className="mt-2 font-mono text-[11px] text-silver-low">
+                  ≈ {listing.sqFtPerToken.toFixed(0)} sqft per full chunk · {formatINR(listing.pricePerToken)}/chunk
+                </p>
               </div>
+
+              <p className="hairline rounded-lg border p-3 font-mono text-[10px] leading-relaxed text-silver-low">
+                Tokens represent an <span className="text-white">undivided proportional share</span> of this
+                property's value — not a surveyed physical spot, the same structure REITs and co-ownership use. Pick
+                a chunk on the map, then dial in exactly how much of it you want.
+              </p>
 
               <div className="hairline flex items-center gap-4 border-t pt-4 text-xs">
                 <span className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-sm border border-white/40 bg-white/10" /> Available
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="h-3 w-3 rounded-sm bg-white" /> Selected
+                  <span className="h-3 w-3 rounded-sm border-2 border-white/70 bg-white/30" /> Partial
                 </span>
                 <span className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-sm bg-zinc-700" /> Sold
                 </span>
+                <span className="flex items-center gap-2">
+                  <span className="h-3 w-3 rounded-sm border border-dashed border-white/20 bg-black/40" /> Road
+                </span>
               </div>
+
+              {activePlot && (
+                <PlotPicker
+                  plot={activePlot}
+                  pricePerSqFt={Number(listing.pricePerSqFt)}
+                  existingInCart={cart.get(activePlot.id)?.sqFt || 0}
+                  onConfirm={handleConfirmPick}
+                  onCancel={() => setActivePlot(null)}
+                />
+              )}
 
               {!user && (
                 <div className="hairline rounded-xl border p-4 text-center">
@@ -175,10 +225,29 @@ export default function PropertyDetail() {
 
               {user && kycVerified && (
                 <>
+                  {cartList.length > 0 && (
+                    <div className="hairline flex flex-col gap-2 rounded-xl border p-3">
+                      {cartList.map((c) => (
+                        <div key={c.plotId} className="flex items-center justify-between font-mono text-[11px]">
+                          <span className="text-silver-low">
+                            R{c.row + 1}C{c.col + 1} · {c.sqFt.toFixed(0)} sqft
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeFromCart(c.plotId)}
+                            className="text-silver-low underline underline-offset-2 hover:text-white"
+                          >
+                            remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div>
                     <p className="mono-label mb-2">Selected</p>
                     <p className="font-mono text-sm text-white">
-                      {selectedList.length} chunk{selectedList.length === 1 ? '' : 's'} · {formatINR(totalPrice)}
+                      {totalSqFt.toFixed(0)} sqft · {formatINR(totalPrice)}
                     </p>
                   </div>
 
@@ -209,17 +278,15 @@ export default function PropertyDetail() {
                     Simulate payment failure (demo)
                   </label>
 
-                  {buyMessage && (
-                    <p className="font-mono text-[11px] text-silver-low">{buyMessage}</p>
-                  )}
+                  {buyMessage && <p className="font-mono text-[11px] text-silver-low">{buyMessage}</p>}
 
                   <button
                     type="button"
                     onClick={handleBuy}
-                    disabled={selectedList.length === 0 || buyStatus === 'processing'}
+                    disabled={cartList.length === 0 || buyStatus === 'processing'}
                     className="btn-silver disabled:opacity-50"
                   >
-                    {buyStatus === 'processing' ? 'Processing…' : `Buy ${selectedList.length || ''} Chunk${selectedList.length === 1 ? '' : 's'}`}
+                    {buyStatus === 'processing' ? 'Processing…' : `Buy ${totalSqFt > 0 ? totalSqFt.toFixed(0) + ' sqft' : ''}`}
                   </button>
                 </>
               )}

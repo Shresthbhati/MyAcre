@@ -62,10 +62,10 @@ export default function Browse() {
                         </p>
                         <p className="mt-1 font-display text-lg italic text-white">{listing.title}</p>
                         <p className="mt-1 font-mono text-xs text-silver">
-                          {formatINR(listing.pricePerToken)} / chunk
+                          {formatINR(listing.pricePerSqFt)} / sqft
                         </p>
                         <p className="font-mono text-[10px] text-silver-low">
-                          {listing.totalTokens - listing.soldCount} of {listing.totalTokens} available
+                          {listing.availableSqFt.toFixed(0)} of {listing.areaSqFt.toFixed(0)} sqft available
                         </p>
                         <Link
                           to={`/browse/${listing.id}`}
@@ -97,13 +97,11 @@ export default function Browse() {
                       <h3 className="mt-2 font-display text-2xl italic text-white">{listing.title}</h3>
                       <div className="mt-4 flex items-center justify-between">
                         <div>
-                          <p className="font-mono text-sm text-white">{formatINR(listing.pricePerToken)}</p>
-                          <p className="font-mono text-[10px] uppercase tracking-widest text-silver-low">per chunk</p>
+                          <p className="font-mono text-sm text-white">{formatINR(listing.pricePerSqFt)}</p>
+                          <p className="font-mono text-[10px] uppercase tracking-widest text-silver-low">per sqft</p>
                         </div>
                         <div className="text-right">
-                          <p className="font-mono text-sm text-white">
-                            {listing.totalTokens - listing.soldCount}/{listing.totalTokens}
-                          </p>
+                          <p className="font-mono text-sm text-white">{listing.availableSqFt.toFixed(0)} sqft</p>
                           <p className="font-mono text-[10px] uppercase tracking-widest text-silver-low">available</p>
                         </div>
                       </div>

@@ -27,11 +27,12 @@ export const api = {
 
   getListings: () => request('/api/listings'),
   getListing: (id) => request(`/api/listings/${id}`),
+  getValuation: (id) => request(`/api/listings/${id}/valuation`),
   createListing: (token, payload) => request('/api/listings', { method: 'POST', token, body: payload }),
-  buyPlots: (token, listingId, { plotIds, paymentMethod, simulatePaymentFailure }) =>
+  buyPlots: (token, listingId, { selections, paymentMethod, simulatePaymentFailure }) =>
     request(`/api/listings/${listingId}/buy`, {
       method: 'POST',
       token,
-      body: { plotIds, paymentMethod, simulatePaymentFailure },
+      body: { selections, paymentMethod, simulatePaymentFailure },
     }),
 }

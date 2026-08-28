@@ -164,6 +164,7 @@ async function main() {
     }
 
     const isExcluded = item.isExcluded || (() => false)
+    const totalCells = item.gridRows * item.gridCols
     let sellableCount = 0
     for (let row = 0; row < item.gridRows; row += 1) {
       for (let col = 0; col < item.gridCols; col += 1) {
@@ -171,9 +172,12 @@ async function main() {
       }
     }
 
+    // Every grid cell represents an equal physical slice — excluding a cell
+    // shrinks the sellable area rather than spreading it onto the rest.
+    const cellSqFt = item.areaSqFt / totalCells
     const pricePerSqFt = item.totalValue / item.areaSqFt
-    const sqFtPerToken = item.areaSqFt / sellableCount
-    const pricePerToken = item.totalValue / sellableCount
+    const sqFtPerToken = cellSqFt
+    const pricePerToken = pricePerSqFt * cellSqFt
 
     const listing = await prisma.listing.create({
       data: {
@@ -218,7 +222,8 @@ async function main() {
         sellableIndex += 1
       }
     }
-    const createdPlots = await Promise.all(plots.map((p) => prisma.plot.create({ data: p })))
+    await prisma.plot.createMany({ data: plots })
+    const createdPlots = await prisma.plot.findMany({ where: { listingId: listing.id } })
 
     const soldPlots = createdPlots.filter((p) => p.status === 'SOLD')
     if (soldPlots.length > 0) {

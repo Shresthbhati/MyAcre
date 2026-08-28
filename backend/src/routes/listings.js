@@ -7,10 +7,9 @@ const { buildValuation } = require('../lib/valuation')
 const router = Router()
 
 function serializeListing(listing) {
-  const sellablePlots = listing.plots ? listing.plots.filter((p) => p.sellable) : null
-  const soldSqFt = sellablePlots
-    ? sellablePlots.reduce((sum, p) => sum + Number(p.soldSqFt), 0)
-    : listing._soldSqFt ?? 0
+  const sellablePlots = listing.plots.filter((p) => p.sellable)
+  const sellableSqFt = sellablePlots.reduce((sum, p) => sum + Number(p.totalSqFt), 0)
+  const soldSqFt = sellablePlots.reduce((sum, p) => sum + Number(p.soldSqFt), 0)
 
   return {
     id: listing.id,
@@ -32,7 +31,8 @@ function serializeListing(listing) {
     titleRejectionReason: listing.titleRejectionReason,
     ownerId: listing.ownerId,
     soldSqFt,
-    availableSqFt: Number(listing.areaSqFt) - soldSqFt,
+    availableSqFt: sellableSqFt - soldSqFt,
+    excludedSqFt: Number(listing.areaSqFt) - sellableSqFt,
     createdAt: listing.createdAt,
   }
 }
@@ -41,7 +41,7 @@ function serializeListing(listing) {
 router.get('/', async (req, res) => {
   const listings = await prisma.listing.findMany({
     where: { titleStatus: 'VERIFIED' },
-    include: { plots: { select: { sellable: true, soldSqFt: true } } },
+    include: { plots: { select: { sellable: true, totalSqFt: true, soldSqFt: true } } },
     orderBy: { createdAt: 'desc' },
   })
   res.json(listings.map(serializeListing))
@@ -116,9 +116,13 @@ router.post('/', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'At least one grid cell must be sellable' })
   }
 
+  // Every grid cell (sellable or not) represents an equal physical slice of
+  // the property — excluding a cell shrinks the sellable area, it doesn't
+  // spread that area onto the remaining chunks.
+  const cellSqFt = Number(areaSqFt) / totalCells
   const pricePerSqFt = Number(totalValue) / Number(areaSqFt)
-  const sqFtPerToken = Number(areaSqFt) / sellableCount
-  const pricePerToken = Number(totalValue) / sellableCount
+  const sqFtPerToken = cellSqFt
+  const pricePerToken = pricePerSqFt * cellSqFt
   const { verified, reason } = verifyTitle(titleDeedNumber)
 
   try {
@@ -165,9 +169,15 @@ router.post('/', requireAuth, async (req, res) => {
       }
 
       return created
-    })
+    }, { timeout: 15000, maxWait: 10000 })
 
-    res.status(201).json(serializeListing(listing))
+    const sellableSqFt = sellableCount * sqFtPerToken
+    res.status(201).json({
+      ...serializeListing({ ...listing, plots: [] }),
+      soldSqFt: 0,
+      availableSqFt: sellableSqFt,
+      excludedSqFt: Number(areaSqFt) - sellableSqFt,
+    })
   } catch (err) {
     res.status(500).json({ error: 'Failed to create listing', detail: err.message })
   }
@@ -199,76 +209,78 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
     return res.status(402).json({ error: 'Payment failed — no tokens were minted.' })
   }
 
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      let listingId = null
-      let totalSqFt = 0
-      const plotIds = []
+  // Read the price outside the transaction — it doesn't change concurrently,
+  // and every round-trip inside the transaction eats into Prisma's timeout
+  // budget against a remote (Neon) database.
+  const priceListing = await prisma.listing.findUnique({ where: { id: req.params.id } })
+  if (!priceListing) return res.status(404).json({ error: 'Listing not found' })
+  const pricePerSqFt = Number(priceListing.pricePerSqFt)
 
-      for (const sel of selections) {
-        const sqFt = Number(sel.sqFt)
-        // Atomic guarded update: only succeeds if enough sqft is still
-        // available in this plot. Postgres locks the row for the
-        // transaction's duration, so a concurrent buyer sees the updated
-        // soldSqFt (or gets blocked) — no double-sale.
-        const rows = await tx.$queryRaw`
-          UPDATE plots
-          SET "soldSqFt" = "soldSqFt" + ${sqFt},
-              status = CASE WHEN "soldSqFt" + ${sqFt} >= "totalSqFt" THEN 'SOLD'::"PlotStatus" ELSE 'PARTIAL'::"PlotStatus" END,
-              "updatedAt" = now()
-          WHERE id = ${sel.plotId} AND sellable = true AND ("totalSqFt" - "soldSqFt") >= ${sqFt}
-          RETURNING id, "listingId"
-        `
-        if (rows.length === 0) {
-          throw new Error('DOUBLE_SALE_PREVENTED')
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        let listingId = null
+        let totalSqFt = 0
+        const plotIds = []
+
+        for (const sel of selections) {
+          const sqFt = Number(sel.sqFt)
+          // Atomic guarded update: only succeeds if enough sqft is still
+          // available in this plot. Postgres locks the row for the
+          // transaction's duration, so a concurrent buyer sees the updated
+          // soldSqFt (or gets blocked) — no double-sale.
+          const rows = await tx.$queryRaw`
+            UPDATE plots
+            SET "soldSqFt" = "soldSqFt" + ${sqFt},
+                status = CASE WHEN "soldSqFt" + ${sqFt} >= "totalSqFt" THEN 'SOLD'::"PlotStatus" ELSE 'PARTIAL'::"PlotStatus" END,
+                "updatedAt" = now()
+            WHERE id = ${sel.plotId} AND sellable = true AND ("totalSqFt" - "soldSqFt") >= ${sqFt}
+            RETURNING id, "listingId"
+          `
+          if (rows.length === 0) {
+            throw new Error('DOUBLE_SALE_PREVENTED')
+          }
+
+          const plotListingId = rows[0].listingId
+          if (listingId && plotListingId !== listingId) throw new Error('All selections must belong to the same listing')
+          listingId = plotListingId
+          totalSqFt += sqFt
+          plotIds.push(sel.plotId)
+
+          await tx.plotHolding.upsert({
+            where: { plotId_ownerId: { plotId: sel.plotId, ownerId: buyer.id } },
+            update: { sqFt: { increment: sqFt } },
+            create: { plotId: sel.plotId, ownerId: buyer.id, sqFt },
+          })
         }
 
-        const plotListingId = rows[0].listingId
-        if (listingId && plotListingId !== listingId) throw new Error('All selections must belong to the same listing')
-        listingId = plotListingId
-        totalSqFt += sqFt
-        plotIds.push(sel.plotId)
+        const amount = pricePerSqFt * totalSqFt
 
-        await tx.plotHolding.upsert({
-          where: { plotId_ownerId: { plotId: sel.plotId, ownerId: buyer.id } },
-          update: { sqFt: { increment: sqFt } },
-          create: { plotId: sel.plotId, ownerId: buyer.id, sqFt },
+        const transaction = await tx.transaction.create({
+          data: {
+            listingId,
+            buyerId: buyer.id,
+            sqFt: totalSqFt,
+            plotIds,
+            amount,
+            status: 'COMPLETED',
+            paymentMethod,
+          },
         })
-      }
 
-      const listing = await tx.listing.findUnique({ where: { id: listingId } })
-      const amount = Number(listing.pricePerSqFt) * totalSqFt
-
-      const transaction = await tx.transaction.create({
-        data: {
-          listingId,
-          buyerId: buyer.id,
-          sqFt: totalSqFt,
-          plotIds,
-          amount,
-          status: 'COMPLETED',
-          paymentMethod,
-        },
-      })
-
-      const existingHolding = await tx.holding.findUnique({
-        where: { listingId_ownerId: { listingId, ownerId: buyer.id } },
-      })
-      await tx.holding.upsert({
-        where: { listingId_ownerId: { listingId, ownerId: buyer.id } },
-        update: { sqFtOwned: { increment: totalSqFt } },
-        create: { listingId, ownerId: buyer.id, sqFtOwned: totalSqFt, plotCount: plotIds.length },
-      })
-      if (existingHolding) {
-        const distinctPlots = await tx.plotHolding.count({ where: { ownerId: buyer.id, plot: { listingId } } })
-        await tx.holding.update({
+        // Approximate: plotCount counts this request's selections, not a
+        // precise distinct-plot recount — good enough for a dashboard stat
+        // without another round-trip against a remote database.
+        await tx.holding.upsert({
           where: { listingId_ownerId: { listingId, ownerId: buyer.id } },
-          data: { plotCount: distinctPlots },
+          update: { sqFtOwned: { increment: totalSqFt }, plotCount: { increment: plotIds.length } },
+          create: { listingId, ownerId: buyer.id, sqFtOwned: totalSqFt, plotCount: plotIds.length },
         })
-      }
 
-      return transaction
-    })
+        return transaction
+      },
+      { timeout: 15000, maxWait: 10000 },
+    )
 
     res.status(201).json(result)
   } catch (err) {

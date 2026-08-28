@@ -42,7 +42,7 @@ export default function Dashboard() {
   }
 
   const portfolioValue = holdings.reduce(
-    (sum, h) => sum + Number(h.listing.pricePerToken) * h.quantity,
+    (sum, h) => sum + Number(h.listing.pricePerSqFt) * h.sqFtOwned,
     0,
   )
 
@@ -85,11 +85,13 @@ export default function Dashboard() {
                       <h3 className="mt-2 font-display text-xl italic text-white">{h.listing.title}</h3>
                       <div className="mt-4 flex items-center justify-between">
                         <div>
-                          <p className="font-mono text-sm text-white">{h.quantity} chunks</p>
-                          <p className="font-mono text-[10px] uppercase tracking-widest text-silver-low">owned</p>
+                          <p className="font-mono text-sm text-white">{h.sqFtOwned.toFixed(0)} sqft</p>
+                          <p className="font-mono text-[10px] uppercase tracking-widest text-silver-low">
+                            {h.plotCount} chunk{h.plotCount === 1 ? '' : 's'}
+                          </p>
                         </div>
                         <p className="font-mono text-sm text-white">
-                          {formatINR(Number(h.listing.pricePerToken) * h.quantity)}
+                          {formatINR(Number(h.listing.pricePerSqFt) * h.sqFtOwned)}
                         </p>
                       </div>
                     </div>
@@ -106,7 +108,7 @@ export default function Dashboard() {
                       className="hairline flex items-center justify-between border-b p-4 font-mono text-xs last:border-b-0"
                     >
                       <span className="text-white">{t.listing.title}</span>
-                      <span className="text-silver-low">{t.quantity} chunks</span>
+                      <span className="text-silver-low">{t.sqFt.toFixed(0)} sqft</span>
                       <span className="text-silver-low uppercase">{t.paymentMethod}</span>
                       <span className="text-white">{formatINR(t.amount)}</span>
                     </div>
