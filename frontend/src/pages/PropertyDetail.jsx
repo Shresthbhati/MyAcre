@@ -8,6 +8,7 @@ import SqFtBar from '../components/browse/SqFtBar'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
+import { txUrl } from '../lib/chain'
 
 export default function PropertyDetail() {
   const { id } = useParams()
@@ -24,6 +25,7 @@ export default function PropertyDetail() {
   const [simulateFailure, setSimulateFailure] = useState(false)
   const [buyStatus, setBuyStatus] = useState('idle') // idle | processing | success | error
   const [buyMessage, setBuyMessage] = useState('')
+  const [buyTxHash, setBuyTxHash] = useState(null)
 
   const loadListing = () => {
     api
@@ -80,15 +82,17 @@ export default function PropertyDetail() {
     if (cartList.length === 0) return
     setBuyStatus('processing')
     setBuyMessage('')
+    setBuyTxHash(null)
     try {
       const token = await getToken()
-      await api.buyPlots(token, listing.id, {
+      const result = await api.buyPlots(token, listing.id, {
         selections: cartList.map((c) => ({ plotId: c.plotId, sqFt: c.sqFt })),
         paymentMethod,
         simulatePaymentFailure: simulateFailure,
       })
       setBuyStatus('success')
       setBuyMessage(`Purchased ${totalSqFt.toFixed(0)} sqft for ${formatINR(totalPrice)}.`)
+      setBuyTxHash(result.txHash || null)
       setCart(new Map())
       loadListing()
     } catch (err) {
@@ -278,7 +282,21 @@ export default function PropertyDetail() {
                     Simulate payment failure (demo)
                   </label>
 
-                  {buyMessage && <p className="font-mono text-[11px] text-silver-low">{buyMessage}</p>}
+                  {buyMessage && (
+                    <p className="font-mono text-[11px] text-silver-low">
+                      {buyMessage}{' '}
+                      {buyTxHash && (
+                        <a
+                          href={txUrl(buyTxHash)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-white underline underline-offset-2"
+                        >
+                          View on PolygonScan ↗
+                        </a>
+                      )}
+                    </p>
+                  )}
 
                   <button
                     type="button"

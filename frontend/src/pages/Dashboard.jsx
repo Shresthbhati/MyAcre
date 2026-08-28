@@ -5,6 +5,7 @@ import ListingThumb from '../components/ui/ListingThumb'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
+import { txUrl } from '../lib/chain'
 
 export default function Dashboard() {
   const { user, getToken } = useAuth()
@@ -111,6 +112,18 @@ export default function Dashboard() {
                       <span className="text-silver-low">{t.sqFt.toFixed(0)} sqft</span>
                       <span className="text-silver-low uppercase">{t.paymentMethod}</span>
                       <span className="text-white">{formatINR(t.amount)}</span>
+                      {t.txHash ? (
+                        <a
+                          href={txUrl(t.txHash)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-silver-low underline underline-offset-2 hover:text-white"
+                        >
+                          on-chain ↗
+                        </a>
+                      ) : (
+                        <span className="text-silver-low/40">off-chain</span>
+                      )}
                     </div>
                   ))}
                 </div>

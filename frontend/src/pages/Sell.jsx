@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import PageShell from '../components/layout/PageShell'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { txUrl } from '../lib/chain'
 
 const EMPTY_FORM = {
   title: '',
@@ -25,6 +26,7 @@ export default function Sell() {
   const [excluded, setExcluded] = useState(new Set()) // "row-col" strings marked as road/common area
   const [status, setStatus] = useState('idle') // idle | submitting | verified | rejected | error
   const [message, setMessage] = useState('')
+  const [onChainTxHash, setOnChainTxHash] = useState(null)
 
   useEffect(() => {
     if (!user) {
@@ -85,6 +87,7 @@ export default function Sell() {
       })
       if (listing.titleStatus === 'VERIFIED') {
         setStatus('verified')
+        setOnChainTxHash(listing.onChainTxHash || null)
       } else {
         setStatus('rejected')
         setMessage(listing.titleRejectionReason)
@@ -139,6 +142,16 @@ export default function Sell() {
                 <p className="font-sans text-sm font-light text-silver-low">
                   Your property cleared the oracle title check and its chunks are now live on the map.
                 </p>
+                {onChainTxHash && (
+                  <a
+                    href={txUrl(onChainTxHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-[11px] text-white underline underline-offset-2"
+                  >
+                    View tokenization on PolygonScan ↗
+                  </a>
+                )}
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
