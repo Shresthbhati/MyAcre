@@ -1,24 +1,28 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import PageShell from '../components/layout/PageShell'
-
-// Simulated KYC: a real Aadhaar/PAN check is out of scope for the hackathon demo.
-// PAN format (5 letters, 4 digits, 1 letter) is used as a rule-based stand-in —
-// anything else is treated as a failed verification, matching the KYC decision
-// branch in the product's user flow.
-const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/
+import { useAuth } from '../context/AuthContext'
+import { api } from '../lib/api'
 
 export default function Kyc() {
   const navigate = useNavigate()
+  const { getToken } = useAuth()
   const [pan, setPan] = useState('')
-  const [status, setStatus] = useState('idle') // idle | checking | verified | rejected
+  const [status, setStatus] = useState('idle') // idle | checking | verified | rejected | error
+  const [errorMessage, setErrorMessage] = useState('')
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setStatus('checking')
-    setTimeout(() => {
-      setStatus(PAN_PATTERN.test(pan.trim().toUpperCase()) ? 'verified' : 'rejected')
-    }, 1200)
+    setErrorMessage('')
+    try {
+      const token = await getToken()
+      const { kycStatus } = await api.verifyKyc(token, pan)
+      setStatus(kycStatus === 'VERIFIED' ? 'verified' : 'rejected')
+    } catch (err) {
+      setStatus('error')
+      setErrorMessage(err.message)
+    }
   }
 
   return (
@@ -47,6 +51,9 @@ export default function Kyc() {
                 <p className="font-mono text-[10px] leading-relaxed text-silver-low">
                   Simulated check for the demo — real verification is not connected to UIDAI.
                 </p>
+                {status === 'error' && (
+                  <p className="font-mono text-[11px] text-silver-low">{errorMessage}</p>
+                )}
                 <button type="submit" disabled={status === 'checking'} className="btn-silver mt-2 disabled:opacity-50">
                   {status === 'checking' ? 'Verifying…' : 'Submit for Verification'}
                 </button>

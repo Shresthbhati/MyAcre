@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum TitleStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id          String    @id @default(uuid())
+  firebaseUid String    @unique
+  email       String    @unique
+  name        String?
+  kycStatus   KycStatus @default(UNVERIFIED)
+  kycPan      String?
+  walletAddress String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  listings     Listing[]     @relation("ListingOwner")
+  holdings     Holding[]
+  transactions Transaction[] @relation("TransactionBuyer")
+
+  @@map("users")
+}
+
+model Listing {
+  id                   String      @id @default(uuid())
+  ownerId              String
+  owner                User        @relation("ListingOwner", fields: [ownerId], references: [id])
+  title                String
+  description          String
+  city                 String
+  latitude             Float
+  longitude            Float
+  totalValue           Decimal     @db.Decimal(14, 2)
+  totalTokens           Int
+  pricePerToken        Decimal     @db.Decimal(14, 2)
+  titleStatus          TitleStatus @default(PENDING)
+  titleRejectionReason String?
+  contractAddress      String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  holdings     Holding[]
+  transactions Transaction[]
+
+  @@map("listings")
+}
+
+model Holding {
+  id        String   @id @default(uuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id])
+  quantity  Int
+  updatedAt DateTime @updatedAt
+
+  @@unique([listingId, ownerId])
+  @@map("holdings")
+}
+
+model Transaction {
+  id            String            @id @default(uuid())
+  listingId     String
+  listing       Listing           @relation(fields: [listingId], references: [id])
+  buyerId       String
+  buyer         User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
+  quantity      Int
+  amount        Decimal           @db.Decimal(14, 2)
+  status        TransactionStatus @default(PENDING)
+  paymentMethod String?
+  txHash        String?
+  createdAt     DateTime          @default(now())
+
+  @@map("transactions")
+}

@@ -8,6 +8,7 @@ import {
   signOut,
 } from 'firebase/auth'
 import { auth, isFirebaseConfigured } from '../firebase/config'
+import { api } from '../lib/api'
 
 const googleProvider = new GoogleAuthProvider()
 
@@ -22,12 +23,27 @@ export function AuthProvider({ children }) {
       setLoading(false)
       return
     }
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser)
       setLoading(false)
+      if (firebaseUser) {
+        // Best-effort: creates/updates the off-chain user row on the backend.
+        // Silently ignored if the backend isn't running yet.
+        try {
+          const token = await firebaseUser.getIdToken()
+          await api.syncUser(token)
+        } catch {
+          // backend not reachable — non-fatal, frontend still works
+        }
+      }
     })
     return unsubscribe
   }, [])
+
+  const getToken = () => {
+    if (!auth.currentUser) return Promise.reject(new Error('Not logged in'))
+    return auth.currentUser.getIdToken()
+  }
 
   const register = (email, password) => {
     if (!isFirebaseConfigured) {
@@ -60,7 +76,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, register, login, loginWithGoogle, logout, isFirebaseConfigured }}
+      value={{ user, loading, register, login, loginWithGoogle, logout, getToken, isFirebaseConfigured }}
     >
       {children}
     </AuthContext.Provider>
