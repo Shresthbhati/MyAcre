@@ -20,6 +20,18 @@ async function request(path, { method = 'GET', token, body } = {}) {
 export const api = {
   syncUser: (token) => request('/api/users/sync', { method: 'POST', token }),
   getMe: (token) => request('/api/users/me', { token }),
+  getMyHoldings: (token) => request('/api/users/me/holdings', { token }),
+  getMyTransactions: (token) => request('/api/users/me/transactions', { token }),
   verifyKyc: (token, pan) => request('/api/kyc/verify', { method: 'POST', token, body: { pan } }),
   getKycStatus: (token) => request('/api/kyc/status', { token }),
+
+  getListings: () => request('/api/listings'),
+  getListing: (id) => request(`/api/listings/${id}`),
+  createListing: (token, payload) => request('/api/listings', { method: 'POST', token, body: payload }),
+  buyPlots: (token, listingId, { plotIds, paymentMethod, simulatePaymentFailure }) =>
+    request(`/api/listings/${listingId}/buy`, {
+      method: 'POST',
+      token,
+      body: { plotIds, paymentMethod, simulatePaymentFailure },
+    }),
 }

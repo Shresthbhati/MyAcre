@@ -6,6 +6,7 @@ import Register from './pages/Register'
 import Kyc from './pages/Kyc'
 import Dashboard from './pages/Dashboard'
 import Browse from './pages/Browse'
+import PropertyDetail from './pages/PropertyDetail'
 import Sell from './pages/Sell'
 import NotFound from './pages/NotFound'
 
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/kyc" element={<Kyc />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/browse" element={<Browse />} />
+        <Route path="/browse/:id" element={<PropertyDetail />} />
         <Route path="/sell" element={<Sell />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
