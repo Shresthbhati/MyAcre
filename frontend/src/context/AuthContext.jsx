@@ -1,11 +1,15 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
 } from 'firebase/auth'
 import { auth, isFirebaseConfigured } from '../firebase/config'
+
+const googleProvider = new GoogleAuthProvider()
 
 const AuthContext = createContext(null)
 
@@ -43,10 +47,21 @@ export function AuthProvider({ children }) {
     return signInWithEmailAndPassword(auth, email, password)
   }
 
+  const loginWithGoogle = () => {
+    if (!isFirebaseConfigured) {
+      return Promise.reject(
+        new Error('Firebase is not configured yet — add your API keys to frontend/.env.local'),
+      )
+    }
+    return signInWithPopup(auth, googleProvider)
+  }
+
   const logout = () => (isFirebaseConfigured ? signOut(auth) : Promise.resolve())
 
   return (
-    <AuthContext.Provider value={{ user, loading, register, login, logout, isFirebaseConfigured }}>
+    <AuthContext.Provider
+      value={{ user, loading, register, login, loginWithGoogle, logout, isFirebaseConfigured }}
+    >
       {children}
     </AuthContext.Provider>
   )

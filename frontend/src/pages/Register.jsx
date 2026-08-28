@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import PageShell from '../components/layout/PageShell'
+import GoogleButton from '../components/ui/GoogleButton'
 import { useAuth } from '../context/AuthContext'
 
 export default function Register() {
-  const { register, isFirebaseConfigured } = useAuth()
+  const { register, loginWithGoogle, isFirebaseConfigured } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ name: '', email: '', password: '' })
   const [status, setStatus] = useState('idle')
@@ -18,6 +19,18 @@ export default function Register() {
     setError('')
     try {
       await register(form.email, form.password)
+      navigate('/kyc')
+    } catch (err) {
+      setError(err.message)
+      setStatus('idle')
+    }
+  }
+
+  const handleGoogle = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      await loginWithGoogle()
       navigate('/kyc')
     } catch (err) {
       setError(err.message)
@@ -75,6 +88,16 @@ export default function Register() {
                 {status === 'loading' ? 'Creating account…' : 'Create Account'}
               </button>
             </form>
+
+            <div className="my-6 flex items-center gap-4">
+              <span className="hairline h-px flex-1 border-t" />
+              <span className="mono-label">Or</span>
+              <span className="hairline h-px flex-1 border-t" />
+            </div>
+
+            <GoogleButton onClick={handleGoogle} disabled={status === 'loading'}>
+              Continue with Google
+            </GoogleButton>
 
             <p className="mono-label mt-8 text-center">
               Already registered?{' '}
