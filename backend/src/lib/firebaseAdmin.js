@@ -1,19 +1,18 @@
-const admin = require('firebase-admin')
+const { initializeApp, getApps, cert } = require('firebase-admin/app')
+const { getAuth } = require('firebase-admin/auth')
 
 // Paste the full contents of the service account JSON (Firebase Console >
 // Project settings > Service accounts > Generate new private key) as a single
-// line into FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env.local.
+// line into FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env.
 const isFirebaseAdminConfigured = Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 
 let app = null
+let auth = null
 
-if (isFirebaseAdminConfigured && !admin.apps.length) {
+if (isFirebaseAdminConfigured) {
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-  app = admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  })
-} else if (admin.apps.length) {
-  app = admin.apps[0]
+  app = getApps().length ? getApps()[0] : initializeApp({ credential: cert(serviceAccount) })
+  auth = getAuth(app)
 }
 
-module.exports = { admin, app, isFirebaseAdminConfigured }
+module.exports = { app, auth, isFirebaseAdminConfigured }

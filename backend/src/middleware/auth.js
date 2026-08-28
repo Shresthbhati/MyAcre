@@ -1,4 +1,4 @@
-const { admin, isFirebaseAdminConfigured } = require('../lib/firebaseAdmin')
+const { auth, isFirebaseAdminConfigured } = require('../lib/firebaseAdmin')
 
 // Verifies the Firebase ID token sent as "Authorization: Bearer <token>" and
 // attaches the decoded token (uid, email, ...) to req.firebaseUser.
@@ -17,7 +17,7 @@ async function requireAuth(req, res, next) {
   }
 
   try {
-    req.firebaseUser = await admin.auth().verifyIdToken(token)
+    req.firebaseUser = await auth.verifyIdToken(token)
     next()
   } catch (err) {
     res.status(401).json({ error: 'Invalid or expired token' })

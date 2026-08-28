@@ -26,4 +26,28 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json(user)
 })
 
+router.get('/me/holdings', requireAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { firebaseUid: req.firebaseUser.uid } })
+  if (!user) return res.status(404).json({ error: 'User not synced yet' })
+
+  const holdings = await prisma.holding.findMany({
+    where: { ownerId: user.id, quantity: { gt: 0 } },
+    include: { listing: true },
+    orderBy: { updatedAt: 'desc' },
+  })
+  res.json(holdings)
+})
+
+router.get('/me/transactions', requireAuth, async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { firebaseUid: req.firebaseUser.uid } })
+  if (!user) return res.status(404).json({ error: 'User not synced yet' })
+
+  const transactions = await prisma.transaction.findMany({
+    where: { buyerId: user.id },
+    include: { listing: { select: { title: true, city: true } } },
+    orderBy: { createdAt: 'desc' },
+  })
+  res.json(transactions)
+})
+
 module.exports = router

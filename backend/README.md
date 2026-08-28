@@ -7,7 +7,7 @@ Node.js/Express API + Prisma/PostgreSQL. Verifies Firebase ID tokens (Firebase A
 ```bash
 cd backend
 npm install
-cp .env.example .env.local   # fill in DATABASE_URL (Neon) and FIREBASE_SERVICE_ACCOUNT_JSON
+cp .env.example .env   # fill in DATABASE_URL (Neon) and FIREBASE_SERVICE_ACCOUNT_JSON
 npm run prisma:migrate       # creates tables from prisma/schema.prisma
 npm run dev                  # starts on http://localhost:4000
 ```

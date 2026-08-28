@@ -26,6 +26,11 @@ enum TransactionStatus {
   FAILED
 }
 
+enum PlotStatus {
+  AVAILABLE
+  SOLD
+}
+
 model User {
   id          String    @id @default(uuid())
   firebaseUid String    @unique
@@ -39,6 +44,7 @@ model User {
 
   listings     Listing[]     @relation("ListingOwner")
   holdings     Holding[]
+  plots        Plot[]
   transactions Transaction[] @relation("TransactionBuyer")
 
   @@map("users")
@@ -53,9 +59,13 @@ model Listing {
   city                 String
   latitude             Float
   longitude            Float
+  titleDeedNumber      String
   totalValue           Decimal     @db.Decimal(14, 2)
-  totalTokens           Int
+  totalTokens          Int
   pricePerToken        Decimal     @db.Decimal(14, 2)
+  gridRows             Int         @default(4)
+  gridCols             Int         @default(5)
+  imageSeed            String
   titleStatus          TitleStatus @default(PENDING)
   titleRejectionReason String?
   contractAddress      String?
@@ -63,9 +73,25 @@ model Listing {
   updatedAt            DateTime    @updatedAt
 
   holdings     Holding[]
+  plots        Plot[]
   transactions Transaction[]
 
   @@map("listings")
+}
+
+model Plot {
+  id        String     @id @default(uuid())
+  listingId String
+  listing   Listing    @relation(fields: [listingId], references: [id])
+  row       Int
+  col       Int
+  status    PlotStatus @default(AVAILABLE)
+  ownerId   String?
+  owner     User?      @relation(fields: [ownerId], references: [id])
+  updatedAt DateTime   @updatedAt
+
+  @@unique([listingId, row, col])
+  @@map("plots")
 }
 
 model Holding {
@@ -88,6 +114,7 @@ model Transaction {
   buyerId       String
   buyer         User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
   quantity      Int
+  plotIds       String[]
   amount        Decimal           @db.Decimal(14, 2)
   status        TransactionStatus @default(PENDING)
   paymentMethod String?
