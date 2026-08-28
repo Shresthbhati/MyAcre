@@ -2,6 +2,13 @@ const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
 
+function verticalRoad(col) {
+  return (row, c) => c === col
+}
+function horizontalRoad(row) {
+  return (r) => r === row
+}
+
 const LISTINGS = [
   {
     title: 'Riverside Heritage Plot',
@@ -10,6 +17,7 @@ const LISTINGS = [
     latitude: 18.5362,
     longitude: 73.894,
     totalValue: 9000000,
+    areaSqFt: 5400,
     gridRows: 6,
     gridCols: 6,
     titleDeedNumber: 'MH-PUN-10231',
@@ -17,15 +25,17 @@ const LISTINGS = [
   },
   {
     title: 'Baner Tech Corridor Plot',
-    description: 'Commercial-zoned plot on the Baner tech corridor, five minutes from the IT parks.',
+    description: 'Commercial-zoned plot on the Baner tech corridor, five minutes from the IT parks. An internal access road runs through the middle of the plot and is excluded from sale.',
     city: 'Pune',
     latitude: 18.559,
     longitude: 73.7868,
     totalValue: 12000000,
+    areaSqFt: 7200,
     gridRows: 6,
     gridCols: 8,
     titleDeedNumber: 'MH-PUN-10456',
     soldChunks: 0,
+    isExcluded: verticalRoad(4),
   },
   {
     title: 'Hinjewadi IT Park Frontage',
@@ -34,6 +44,7 @@ const LISTINGS = [
     latitude: 18.5908,
     longitude: 73.7362,
     totalValue: 7500000,
+    areaSqFt: 4500,
     gridRows: 5,
     gridCols: 6,
     titleDeedNumber: 'MH-PUN-10789',
@@ -41,11 +52,12 @@ const LISTINGS = [
   },
   {
     title: 'Indiranagar Boutique Plot',
-    description: 'Boutique retail plot on 100 Feet Road, Indiranagar — one of Bengaluru\'s densest retail strips.',
+    description: "Boutique retail plot on 100 Feet Road, Indiranagar — one of Bengaluru's densest retail strips.",
     city: 'Bengaluru',
     latitude: 12.9716,
     longitude: 77.6412,
     totalValue: 15000000,
+    areaSqFt: 6000,
     gridRows: 6,
     gridCols: 10,
     titleDeedNumber: 'KA-BLR-20114',
@@ -53,23 +65,26 @@ const LISTINGS = [
   },
   {
     title: 'Connaught Place Heritage Frontage',
-    description: 'Heritage-block frontage plot in the CP inner circle, Delhi\'s prime commercial address.',
+    description: "Heritage-block frontage plot in the CP inner circle, Delhi's prime commercial address. A frontage setback road strip is excluded from sale.",
     city: 'New Delhi',
     latitude: 28.6315,
     longitude: 77.2167,
     totalValue: 20000000,
+    areaSqFt: 6400,
     gridRows: 8,
     gridCols: 8,
     titleDeedNumber: 'DL-NDL-30021',
     soldChunks: 0,
+    isExcluded: horizontalRoad(4),
   },
   {
     title: 'T Nagar Commercial Plot',
-    description: 'High-street commercial plot in T Nagar, Chennai\'s busiest shopping district.',
+    description: "High-street commercial plot in T Nagar, Chennai's busiest shopping district.",
     city: 'Chennai',
     latitude: 13.0418,
     longitude: 80.2341,
     totalValue: 10000000,
+    areaSqFt: 4800,
     gridRows: 6,
     gridCols: 8,
     titleDeedNumber: 'TN-CHN-40092',
@@ -77,7 +92,46 @@ const LISTINGS = [
   },
 ]
 
+// Synthetic quarterly price-per-sqft history per city (2021 Q1 -> 2026 Q2),
+// standing in for real market/registry data — a gentle compound trend plus
+// a small deterministic wobble so the line isn't a perfectly straight ramp.
+const CITY_BASE = {
+  Pune: { base: 9500, quarterlyGrowth: 0.019 },
+  Bengaluru: { base: 13500, quarterlyGrowth: 0.023 },
+  'New Delhi': { base: 17500, quarterlyGrowth: 0.014 },
+  Chennai: { base: 8800, quarterlyGrowth: 0.017 },
+}
+
+function buildQuarters() {
+  const quarters = []
+  for (let year = 2021; year <= 2026; year += 1) {
+    for (let q = 1; q <= 4; q += 1) {
+      if (year === 2026 && q > 2) continue
+      quarters.push(`${year}-Q${q}`)
+    }
+  }
+  return quarters
+}
+
+async function seedPriceHistory() {
+  const quarters = buildQuarters()
+  for (const [city, { base, quarterlyGrowth }] of Object.entries(CITY_BASE)) {
+    for (let i = 0; i < quarters.length; i += 1) {
+      const wobble = 1 + 0.015 * Math.sin(i * 0.9)
+      const price = base * Math.pow(1 + quarterlyGrowth, i) * wobble
+      await prisma.areaPriceHistory.upsert({
+        where: { city_period: { city, period: quarters[i] } },
+        update: { pricePerSqFt: price, periodIndex: i },
+        create: { city, period: quarters[i], periodIndex: i, pricePerSqFt: price },
+      })
+    }
+    console.log(`Seeded ${quarters.length} price-history points for ${city}`)
+  }
+}
+
 async function main() {
+  await seedPriceHistory()
+
   const owner = await prisma.user.upsert({
     where: { firebaseUid: 'seed-demo-owner' },
     update: {},
@@ -109,8 +163,17 @@ async function main() {
       continue
     }
 
-    const totalTokens = item.gridRows * item.gridCols
-    const pricePerToken = item.totalValue / totalTokens
+    const isExcluded = item.isExcluded || (() => false)
+    let sellableCount = 0
+    for (let row = 0; row < item.gridRows; row += 1) {
+      for (let col = 0; col < item.gridCols; col += 1) {
+        if (!isExcluded(row, col)) sellableCount += 1
+      }
+    }
+
+    const pricePerSqFt = item.totalValue / item.areaSqFt
+    const sqFtPerToken = item.areaSqFt / sellableCount
+    const pricePerToken = item.totalValue / sellableCount
 
     const listing = await prisma.listing.create({
       data: {
@@ -121,8 +184,11 @@ async function main() {
         latitude: item.latitude,
         longitude: item.longitude,
         totalValue: item.totalValue,
-        totalTokens,
+        areaSqFt: item.areaSqFt,
+        pricePerSqFt,
+        totalTokens: sellableCount,
         pricePerToken,
+        sqFtPerToken,
         gridRows: item.gridRows,
         gridCols: item.gridCols,
         imageSeed: item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -131,41 +197,54 @@ async function main() {
       },
     })
 
-    let chunkIndex = 0
+    let sellableIndex = 0
     const plots = []
     for (let row = 0; row < item.gridRows; row += 1) {
       for (let col = 0; col < item.gridCols; col += 1) {
-        const sold = chunkIndex < item.soldChunks
+        if (isExcluded(row, col)) {
+          plots.push({ listingId: listing.id, row, col, sellable: false, totalSqFt: 0, status: 'EXCLUDED' })
+          continue
+        }
+        const sold = sellableIndex < item.soldChunks
         plots.push({
           listingId: listing.id,
           row,
           col,
+          sellable: true,
+          totalSqFt: sqFtPerToken,
+          soldSqFt: sold ? sqFtPerToken : 0,
           status: sold ? 'SOLD' : 'AVAILABLE',
-          ownerId: sold ? buyer.id : null,
         })
-        chunkIndex += 1
+        sellableIndex += 1
       }
     }
-    await prisma.plot.createMany({ data: plots })
+    const createdPlots = await Promise.all(plots.map((p) => prisma.plot.create({ data: p })))
 
-    if (item.soldChunks > 0) {
+    const soldPlots = createdPlots.filter((p) => p.status === 'SOLD')
+    if (soldPlots.length > 0) {
+      const sqFtOwned = soldPlots.length * sqFtPerToken
       await prisma.holding.create({
-        data: { listingId: listing.id, ownerId: buyer.id, quantity: item.soldChunks },
+        data: { listingId: listing.id, ownerId: buyer.id, sqFtOwned, plotCount: soldPlots.length },
+      })
+      await prisma.plotHolding.createMany({
+        data: soldPlots.map((p) => ({ plotId: p.id, ownerId: buyer.id, sqFt: sqFtPerToken })),
       })
       await prisma.transaction.create({
         data: {
           listingId: listing.id,
           buyerId: buyer.id,
-          quantity: item.soldChunks,
-          plotIds: plots.filter((p) => p.status === 'SOLD').map((_, i) => `seed-${i}`),
-          amount: pricePerToken * item.soldChunks,
+          sqFt: sqFtOwned,
+          plotIds: soldPlots.map((p) => p.id),
+          amount: pricePerToken * soldPlots.length,
           status: 'COMPLETED',
           paymentMethod: 'upi',
         },
       })
     }
 
-    console.log(`Seeded "${item.title}" — ${totalTokens} chunks @ ₹${pricePerToken.toFixed(0)} each`)
+    console.log(
+      `Seeded "${item.title}" — ${sellableCount} sellable chunks (${plots.length - sellableCount} excluded) @ ₹${pricePerToken.toFixed(0)} each, ${sqFtPerToken.toFixed(1)} sqft/chunk`,
+    )
   }
 }
 

@@ -31,7 +31,7 @@ router.get('/me/holdings', requireAuth, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not synced yet' })
 
   const holdings = await prisma.holding.findMany({
-    where: { ownerId: user.id, quantity: { gt: 0 } },
+    where: { ownerId: user.id, sqFtOwned: { gt: 0 } },
     include: { listing: true },
     orderBy: { updatedAt: 'desc' },
   })
