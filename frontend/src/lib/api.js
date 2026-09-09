@@ -28,6 +28,7 @@ export const api = {
   getListings: () => request('/api/listings'),
   getListing: (id) => request(`/api/listings/${id}`),
   getValuation: (id) => request(`/api/listings/${id}/valuation`),
+  getPassport: (id) => request(`/api/listings/${id}/passport`),
   createListing: (token, payload) => request('/api/listings', { method: 'POST', token, body: payload }),
   buyPlots: (token, listingId, { selections, paymentMethod, simulatePaymentFailure }) =>
     request(`/api/listings/${listingId}/buy`, {

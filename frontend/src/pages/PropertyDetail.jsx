@@ -5,6 +5,7 @@ import PlotGridMap from '../components/browse/PlotGridMap'
 import PlotPicker from '../components/browse/PlotPicker'
 import ValuationChart from '../components/browse/ValuationChart'
 import SqFtBar from '../components/browse/SqFtBar'
+import PropertyPassport from '../components/browse/PropertyPassport'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
@@ -16,6 +17,7 @@ export default function PropertyDetail() {
 
   const [listing, setListing] = useState(null)
   const [valuation, setValuation] = useState(null)
+  const [passport, setPassport] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error | notfound
   const [me, setMe] = useState(null)
 
@@ -36,6 +38,7 @@ export default function PropertyDetail() {
       })
       .catch(() => setStatus((s) => (s === 'loading' ? 'notfound' : 'error')))
     api.getValuation(id).then(setValuation).catch(() => {})
+    api.getPassport(id).then(setPassport).catch(() => {})
   }
 
   useEffect(() => {
@@ -132,7 +135,9 @@ export default function PropertyDetail() {
     <PageShell>
       <section className="py-16 md:py-20">
         <div className="container-fluid">
-          <p className="mono-label mb-4">{listing.city}</p>
+          <p className="mono-label mb-4">
+            {listing.city} · {listing.assetId}
+          </p>
           <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="font-display text-4xl italic md:text-5xl">{listing.title}</h1>
@@ -165,6 +170,8 @@ export default function PropertyDetail() {
                   <ValuationChart valuation={valuation} />
                 </div>
               )}
+
+              <PropertyPassport passport={passport} />
             </div>
 
             <div className="glass flex flex-col gap-6 rounded-2xl p-6 md:p-8">

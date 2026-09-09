@@ -4,8 +4,17 @@ const { requireAuth } = require('../middleware/auth')
 const { verifyTitle } = require('../lib/oracle')
 const { buildValuation } = require('../lib/valuation')
 const blockchain = require('../lib/blockchain')
+const { findDuplicateAsset } = require('../lib/assetIdentity')
 
 const router = Router()
+
+// Stable, human-readable asset code derived from existing fields — not a
+// new identity system, just a display label. MYA-IN-<CITY3>-<idsuffix>.
+function assetIdFor(listing) {
+  const cityCode = (listing.city || 'XX').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase().padEnd(3, 'X')
+  const suffix = listing.id.replace(/-/g, '').slice(0, 6).toUpperCase()
+  return `MYA-IN-${cityCode}-${suffix}`
+}
 
 function serializeListing(listing) {
   const sellablePlots = listing.plots.filter((p) => p.sellable)
@@ -14,6 +23,7 @@ function serializeListing(listing) {
 
   return {
     id: listing.id,
+    assetId: assetIdFor(listing),
     title: listing.title,
     description: listing.description,
     city: listing.city,
@@ -83,6 +93,103 @@ router.get('/:id/valuation', async (req, res) => {
   })
 })
 
+// Property Passport: aggregates verification, geometry, valuation, and
+// blockchain proof into one trust dossier. Pulls from data that already
+// exists on the listing — no new tables. Intentionally coarse checks
+// (deed-registry match, plot-geometry consistency) since MyAcre has no real
+// government registry integration; see docs/LEGAL_MODEL.md.
+router.get('/:id/passport', async (req, res) => {
+  const listing = await prisma.listing.findUnique({
+    where: { id: req.params.id },
+    include: {
+      plots: { select: { sellable: true, totalSqFt: true, soldSqFt: true, status: true } },
+      transactions: { orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, sqFt: true, amount: true, status: true, txHash: true, createdAt: true } },
+    },
+  })
+  if (!listing) return res.status(404).json({ error: 'Listing not found' })
+
+  const history = await prisma.areaPriceHistory.findMany({ where: { city: listing.city }, orderBy: { periodIndex: 'asc' } })
+  const valuation = buildValuation(history)
+  const listingPricePerSqFt = Number(listing.pricePerSqFt)
+  const deviationPercent = valuation.currentAreaAvg > 0
+    ? Number((((listingPricePerSqFt - valuation.currentAreaAvg) / valuation.currentAreaAvg) * 100).toFixed(1))
+    : 0
+
+  const { verified: titleVerified, reason: titleReason } = verifyTitle(listing.titleDeedNumber)
+  const geometryOk = listing.plots.length === listing.gridRows * listing.gridCols
+
+  const checks = [
+    {
+      check: 'TITLE',
+      status: listing.titleStatus,
+      provider: 'MockRegistryProvider (DEMO)',
+      confidence: titleVerified ? 100 : 0,
+      evidenceRef: listing.titleDeedNumber,
+      explanation: titleVerified ? 'Deed number matched the demo registry sample set.' : titleReason,
+    },
+    {
+      check: 'GEOMETRY',
+      status: geometryOk ? 'VERIFIED' : 'FLAGGED',
+      provider: 'DemoTokenizationGrid',
+      confidence: geometryOk ? 92 : 40,
+      evidenceRef: `${listing.gridRows}x${listing.gridCols} grid`,
+      explanation: geometryOk
+        ? 'Grid cell count matches declared rows × cols; this is a tokenization grid, not a surveyed parcel boundary.'
+        : 'Grid cell count does not match declared dimensions.',
+    },
+    {
+      check: 'VALUATION',
+      status: Math.abs(deviationPercent) <= 15 ? 'VERIFIED' : 'FLAGGED',
+      provider: 'LinearRegressionTrendModel (DEMO)',
+      confidence: Math.max(0, 100 - Math.abs(deviationPercent) * 2),
+      evidenceRef: `${history.length} historical price points for ${listing.city}`,
+      explanation: `Listing price is ${deviationPercent >= 0 ? '+' : ''}${deviationPercent}% vs. the model's current-area average of ${valuation.currentAreaAvg}/sqft.`,
+    },
+    {
+      check: 'BLOCKCHAIN_SETTLEMENT',
+      status: listing.onChainTxHash ? 'VERIFIED' : 'PENDING',
+      provider: 'PropertyToken.sol (Polygon Amoy)',
+      confidence: listing.onChainTxHash ? 100 : 0,
+      evidenceRef: listing.onChainTxHash || null,
+      explanation: listing.onChainTxHash
+        ? 'Property was tokenized on-chain; supply cap enforced by contract.'
+        : 'Not yet tokenized on-chain (blockchain not configured or tokenization pending).',
+    },
+  ]
+
+  const trustScore = Math.round(checks.reduce((sum, c) => sum + c.confidence, 0) / checks.length)
+
+  res.json({
+    assetId: assetIdFor(listing),
+    summary: {
+      title: listing.title,
+      city: listing.city,
+      latitude: listing.latitude,
+      longitude: listing.longitude,
+      totalValue: listing.totalValue,
+      areaSqFt: listing.areaSqFt,
+      titleStatus: listing.titleStatus,
+      createdAt: listing.createdAt,
+    },
+    trustScore,
+    checks,
+    valuation: { ...valuation, listingPricePerSqFt, deviationPercent },
+    geometry: {
+      type: 'DEMO_TOKENIZATION_GRID',
+      note: 'Equal-area grid over the listing coordinates for fractional sale — not a legally surveyed parcel boundary.',
+      gridRows: listing.gridRows,
+      gridCols: listing.gridCols,
+      excludedCells: listing.plots.filter((p) => !p.sellable).length,
+    },
+    ownership: {
+      contractAddress: listing.contractAddress,
+      onChainTxHash: listing.onChainTxHash,
+      tokenized: Boolean(listing.onChainTxHash),
+    },
+    recentTransactions: listing.transactions,
+  })
+})
+
 // Sell & Tokenize: list a property, run it through the mock oracle, and — if
 // verified — generate the grid of purchasable plots (one per chunk).
 // `excludedCells` marks grid cells that overlap roads/common area — they're
@@ -110,6 +217,21 @@ router.post('/', requireAuth, async (req, res) => {
 
   if (!title || !description || !city || latitude == null || longitude == null || !totalValue || !areaSqFt || !titleDeedNumber) {
     return res.status(400).json({ error: 'Missing required listing fields' })
+  }
+
+  const duplicate = await findDuplicateAsset(prisma, {
+    ownerId: owner.id,
+    titleDeedNumber,
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+  })
+  if (duplicate) {
+    return res.status(409).json({
+      error: 'DUPLICATE_ASSET_DETECTED',
+      message: `This property matches an existing listing ("${duplicate.existingListingTitle}") on ${duplicate.matchedOn.join(' and ')}.`,
+      existingListingId: duplicate.existingListingId,
+      matchedOn: duplicate.matchedOn,
+    })
   }
 
   const excludedSet = new Set(excludedCells.map(({ row, col }) => `${row}-${col}`))
