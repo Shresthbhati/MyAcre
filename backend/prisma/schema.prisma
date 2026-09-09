@@ -2,13 +2,14 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// SQLite — zero external dependencies (no Postgres instance/credentials
-// needed), so the app runs anywhere out of the box. Swap provider back to
-// "postgresql" for a real deployment; nothing else in the schema is
-// Postgres-specific (see the buy-transaction comment in listings.js for the
-// one query that had to change alongside this).
+// Postgres, hosted on Supabase — a real, always-on database with zero local
+// setup (no Docker, no manual Postgres install). Money/area fields stay
+// plain Float rather than Postgres's native Decimal: the app already treats
+// every value as a JS number end-to-end (Number(...) at every read site),
+// and Prisma's Decimal type would just add serialization friction back in
+// for no benefit at this scale.
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -151,7 +152,7 @@ model Transaction {
   buyerId       String
   buyer         User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
   sqFt          Float
-  plotIds       Json              // array of plot ids — SQLite has no native array type, Prisma's Json field round-trips it fine
+  plotIds       Json              // array of plot ids, stored as JSON — round-trips fine on Postgres, no native array column needed
   amount        Float
   status        TransactionStatus @default(PENDING)
   paymentMethod String?

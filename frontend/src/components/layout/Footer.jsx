@@ -7,7 +7,7 @@ export default function Footer() {
         <div>
           <p className="font-mono text-sm font-bold uppercase tracking-[0.3em] text-white">MyAcre</p>
           <p className="mt-3 max-w-xs font-sans text-sm font-light text-silver-low">
-            Fractional real estate ownership, verified on-chain. Built for Smart India Hackathon 2026.
+            Fractional real estate ownership, verified on-chain.
           </p>
         </div>
 

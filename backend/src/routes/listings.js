@@ -378,26 +378,29 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
 
         for (const sel of selections) {
           const sqFt = Number(sel.sqFt)
-          // Guarded read-then-write inside a single interactive transaction.
-          // SQLite serializes writers (only one write transaction commits at
-          // a time), so a concurrent buyer racing for the same plot either
-          // sees this transaction's committed soldSqFt or is blocked until
-          // it commits — no double-sale, without needing Postgres's atomic
-          // guarded UPDATE ... WHERE trick.
-          const plot = await tx.plot.findUnique({ where: { id: sel.plotId } })
-          const remaining = plot ? Number(plot.totalSqFt) - Number(plot.soldSqFt) : 0
-          if (!plot || !plot.sellable || remaining < sqFt) {
+          // Atomic guarded update: only succeeds if enough sqft is still
+          // available in this plot. Postgres locks the row for the
+          // transaction's duration, so a concurrent buyer sees the updated
+          // soldSqFt (or gets blocked) — no double-sale. (A plain
+          // read-then-write here would NOT be safe on Postgres — two
+          // concurrent transactions could both read stale soldSqFt before
+          // either commits. This single guarded statement is what closes
+          // that race.)
+          const rows = await tx.$queryRaw`
+            UPDATE plots
+            SET "soldSqFt" = "soldSqFt" + ${sqFt},
+                status = CASE WHEN "soldSqFt" + ${sqFt} >= "totalSqFt" THEN 'SOLD'::"PlotStatus" ELSE 'PARTIAL'::"PlotStatus" END,
+                "updatedAt" = now()
+            WHERE id = ${sel.plotId} AND sellable = true AND ("totalSqFt" - "soldSqFt") >= ${sqFt}
+            RETURNING id, "listingId"
+          `
+          if (rows.length === 0) {
             throw new Error('DOUBLE_SALE_PREVENTED')
           }
 
-          const newSoldSqFt = Number(plot.soldSqFt) + sqFt
-          await tx.plot.update({
-            where: { id: sel.plotId },
-            data: { soldSqFt: newSoldSqFt, status: newSoldSqFt >= Number(plot.totalSqFt) ? 'SOLD' : 'PARTIAL' },
-          })
-
-          if (listingId && plot.listingId !== listingId) throw new Error('All selections must belong to the same listing')
-          listingId = plot.listingId
+          const plotListingId = rows[0].listingId
+          if (listingId && plotListingId !== listingId) throw new Error('All selections must belong to the same listing')
+          listingId = plotListingId
           totalSqFt += sqFt
           plotIds.push(sel.plotId)
 

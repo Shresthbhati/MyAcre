@@ -13,14 +13,14 @@ India's land ownership records are paper-based, slow to update, and easy to forg
 - **Atomic no-double-sale purchases** — enforced twice over: a guarded database transaction off-chain, and an on-chain Solidity `require` that reverts the entire transaction if a purchase would exceed a property's remaining supply.
 - **On-chain settlement** — an ERC-1155 contract (`contracts/`) where each listing is one token id and a holder's balance is the sqft they own; the backend mints on the buyer's behalf via an auto-generated custodial wallet, so no one needs their own MetaMask to use the app.
 - **Historical price-trend valuation** — a simple linear-regression model over seeded historical price-per-sqft data, shown per listing so buyers can see how prices in that area have moved.
-- **Firebase Auth** (email/password + Google) and a full off-chain relational data model (users, listings, holdings, transactions) via Prisma, backed by a local SQLite file — no external database to provision.
+- **Firebase Auth** (email/password + Google) and a full off-chain relational data model (users, listings, holdings, transactions) via Prisma, backed by a hosted Postgres instance on Supabase — no local database install.
 
 ## Tech stack
 
 | Layer | Tech |
 |---|---|
 | Frontend | React (Vite), Tailwind CSS v4, React Router, Leaflet, Firebase Auth |
-| Backend | Node.js, Express, Prisma, SQLite (swappable to Postgres) |
+| Backend | Node.js, Express, Prisma, Postgres (Supabase) |
 | Blockchain | Solidity (OpenZeppelin ERC-1155), Hardhat, Polygon Amoy testnet, ethers.js |
 | Auth/Identity | Firebase Authentication, Firebase Admin SDK (ID token verification) |
 
@@ -29,7 +29,7 @@ India's land ownership records are paper-based, slow to update, and easy to forg
 ```
 MyAcre/
 ├── frontend/    React + Tailwind web app
-├── backend/     Express API + Prisma/SQLite + blockchain integration
+├── backend/     Express API + Prisma/Postgres (Supabase) + blockchain integration
 ├── contracts/   Solidity contracts (Hardhat), deployed to Polygon Amoy
 └── docs/        architecture notes, demo script
 ```
@@ -48,7 +48,7 @@ npm run dev                  # http://localhost:5173
 # 2. Backend (separate terminal)
 cd backend
 npm install
-cp .env.example .env         # SQLite works out of the box; fill in FIREBASE_SERVICE_ACCOUNT_JSON
+cp .env.example .env         # fill in DATABASE_URL (Supabase pooler string) + FIREBASE_SERVICE_ACCOUNT_JSON
 npm run prisma:migrate
 node prisma/seed.js          # optional: sample properties
 npm run dev                  # http://localhost:4000
