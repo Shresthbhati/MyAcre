@@ -1,6 +1,6 @@
 # MyAcre
 
-**Blockchain-based fractional real estate ownership** — built for Smart India Hackathon 2026, Problem Statement **SIH26204** (AICTE Student Innovation, blockchain theme), by team **CodeCrafters**.
+**Blockchain-based fractional real estate ownership** — built by team **CodeCrafters**.
 
 India's land ownership records are paper-based, slow to update, and easy to forge — and real estate investment is locked behind crore-scale entry costs. MyAcre splits a property into small, tradeable digital tokens (sq-ft-precise fractional ownership), runs every listing through a title-verification check, and lets smart contracts mint/transfer ownership atomically so the same square foot can never be sold twice.
 

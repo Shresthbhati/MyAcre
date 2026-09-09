@@ -11,7 +11,7 @@ const FEATURES = [
     index: '02',
     tag: 'Verified',
     title: 'Title, Checked.',
-    body: 'Every listing clears an on-chain oracle check against registry records before a single token is minted.',
+    body: 'Every listing clears a title-verification check before a single token is minted — the check runs off-chain, the mint itself is what settles on Polygon.',
   },
   {
     index: '03',

@@ -4,7 +4,7 @@ export default function Hero() {
       <div className="container-fluid">
         <div className="glass animate-fade-in rounded-[2rem] px-6 py-16 text-center md:rounded-[4rem] md:px-12 md:py-28">
           <p className="mono-label animate-slide-up mb-6" style={{ animationDelay: '100ms' }}>
-            Blockchain Real Estate · SIH 2026
+            Blockchain Real Estate · Verified Property Infrastructure
           </p>
 
           <h1

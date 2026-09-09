@@ -31,7 +31,7 @@ export default function Footer() {
           <div>
             <p className="mono-label">Info</p>
             <div className="mt-4 flex flex-col gap-2">
-              <span className="text-sm text-silver-low">SIH26204 · CodeCrafters</span>
+              <span className="text-sm text-silver-low">Team CodeCrafters</span>
               <span className="text-sm text-silver-low">Built on Polygon</span>
             </div>
           </div>
