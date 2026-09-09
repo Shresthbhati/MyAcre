@@ -18,6 +18,10 @@ contracts/typechain-types/
 .env
 *.local
 
+# Local SQLite database files
+*.db
+*.db-journal
+
 # Logs
 *.log
 npm-debug.log*

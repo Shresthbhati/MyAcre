@@ -2,8 +2,13 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// SQLite — zero external dependencies (no Postgres instance/credentials
+// needed), so the app runs anywhere out of the box. Swap provider back to
+// "postgresql" for a real deployment; nothing else in the schema is
+// Postgres-specific (see the buy-transaction comment in listings.js for the
+// one query that had to change alongside this).
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -63,11 +68,11 @@ model Listing {
   latitude             Float
   longitude            Float
   titleDeedNumber      String
-  totalValue           Decimal     @db.Decimal(14, 2)
+  totalValue           Float
   areaSqFt             Float
-  pricePerSqFt         Decimal     @db.Decimal(14, 2)
+  pricePerSqFt         Float
   totalTokens          Int
-  pricePerToken        Decimal     @db.Decimal(14, 2)
+  pricePerToken        Float
   sqFtPerToken          Float
   gridRows             Int         @default(4)
   gridCols             Int         @default(5)
@@ -146,8 +151,8 @@ model Transaction {
   buyerId       String
   buyer         User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
   sqFt          Float
-  plotIds       String[]
-  amount        Decimal           @db.Decimal(14, 2)
+  plotIds       Json              // array of plot ids — SQLite has no native array type, Prisma's Json field round-trips it fine
+  amount        Float
   status        TransactionStatus @default(PENDING)
   paymentMethod String?
   txHash        String?
@@ -164,7 +169,7 @@ model AreaPriceHistory {
   city         String
   period       String
   periodIndex  Int
-  pricePerSqFt Decimal  @db.Decimal(14, 2)
+  pricePerSqFt Float
   createdAt    DateTime @default(now())
 
   @@unique([city, period])

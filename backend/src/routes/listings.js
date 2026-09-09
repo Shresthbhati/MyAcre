@@ -118,7 +118,13 @@ router.get('/:id/passport', async (req, res) => {
   const { verified: titleVerified, reason: titleReason } = verifyTitle(listing.titleDeedNumber)
   const geometryOk = listing.plots.length === listing.gridRows * listing.gridCols
 
-  const checks = [
+  // Trust score is computed only from verification checks (title, geometry,
+  // valuation) — signals about whether the *asset* is what it claims to be.
+  // Blockchain settlement is a separate ownership/status fact: an unsold,
+  // fully-verified listing that simply hasn't been tokenized yet (or is
+  // running with no blockchain configured) shouldn't read as "low trust".
+  // It's still surfaced in `checks` for the UI, just excluded from the average.
+  const verificationChecks = [
     {
       check: 'TITLE',
       status: listing.titleStatus,
@@ -145,19 +151,21 @@ router.get('/:id/passport', async (req, res) => {
       evidenceRef: `${history.length} historical price points for ${listing.city}`,
       explanation: `Listing price is ${deviationPercent >= 0 ? '+' : ''}${deviationPercent}% vs. the model's current-area average of ${valuation.currentAreaAvg}/sqft.`,
     },
-    {
-      check: 'BLOCKCHAIN_SETTLEMENT',
-      status: listing.onChainTxHash ? 'VERIFIED' : 'PENDING',
-      provider: 'PropertyToken.sol (Polygon Amoy)',
-      confidence: listing.onChainTxHash ? 100 : 0,
-      evidenceRef: listing.onChainTxHash || null,
-      explanation: listing.onChainTxHash
-        ? 'Property was tokenized on-chain; supply cap enforced by contract.'
-        : 'Not yet tokenized on-chain (blockchain not configured or tokenization pending).',
-    },
   ]
 
-  const trustScore = Math.round(checks.reduce((sum, c) => sum + c.confidence, 0) / checks.length)
+  const blockchainCheck = {
+    check: 'BLOCKCHAIN_SETTLEMENT',
+    status: listing.onChainTxHash ? 'VERIFIED' : 'PENDING',
+    provider: 'PropertyToken.sol (Polygon Amoy)',
+    confidence: listing.onChainTxHash ? 100 : 0,
+    evidenceRef: listing.onChainTxHash || null,
+    explanation: listing.onChainTxHash
+      ? 'Property was tokenized on-chain; supply cap enforced by contract.'
+      : 'Not yet tokenized on-chain (blockchain not configured or tokenization pending) — this does not affect the trust score, which reflects asset verification, not settlement progress.',
+  }
+
+  const checks = [...verificationChecks, blockchainCheck]
+  const trustScore = Math.round(verificationChecks.reduce((sum, c) => sum + c.confidence, 0) / verificationChecks.length)
 
   res.json({
     assetId: assetIdFor(listing),
@@ -356,7 +364,7 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
 
   // Read the price outside the transaction — it doesn't change concurrently,
   // and every round-trip inside the transaction eats into Prisma's timeout
-  // budget against a remote (Neon) database.
+  // budget against a remote database.
   const priceListing = await prisma.listing.findUnique({ where: { id: req.params.id } })
   if (!priceListing) return res.status(404).json({ error: 'Listing not found' })
   const pricePerSqFt = Number(priceListing.pricePerSqFt)
@@ -370,25 +378,26 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
 
         for (const sel of selections) {
           const sqFt = Number(sel.sqFt)
-          // Atomic guarded update: only succeeds if enough sqft is still
-          // available in this plot. Postgres locks the row for the
-          // transaction's duration, so a concurrent buyer sees the updated
-          // soldSqFt (or gets blocked) — no double-sale.
-          const rows = await tx.$queryRaw`
-            UPDATE plots
-            SET "soldSqFt" = "soldSqFt" + ${sqFt},
-                status = CASE WHEN "soldSqFt" + ${sqFt} >= "totalSqFt" THEN 'SOLD'::"PlotStatus" ELSE 'PARTIAL'::"PlotStatus" END,
-                "updatedAt" = now()
-            WHERE id = ${sel.plotId} AND sellable = true AND ("totalSqFt" - "soldSqFt") >= ${sqFt}
-            RETURNING id, "listingId"
-          `
-          if (rows.length === 0) {
+          // Guarded read-then-write inside a single interactive transaction.
+          // SQLite serializes writers (only one write transaction commits at
+          // a time), so a concurrent buyer racing for the same plot either
+          // sees this transaction's committed soldSqFt or is blocked until
+          // it commits — no double-sale, without needing Postgres's atomic
+          // guarded UPDATE ... WHERE trick.
+          const plot = await tx.plot.findUnique({ where: { id: sel.plotId } })
+          const remaining = plot ? Number(plot.totalSqFt) - Number(plot.soldSqFt) : 0
+          if (!plot || !plot.sellable || remaining < sqFt) {
             throw new Error('DOUBLE_SALE_PREVENTED')
           }
 
-          const plotListingId = rows[0].listingId
-          if (listingId && plotListingId !== listingId) throw new Error('All selections must belong to the same listing')
-          listingId = plotListingId
+          const newSoldSqFt = Number(plot.soldSqFt) + sqFt
+          await tx.plot.update({
+            where: { id: sel.plotId },
+            data: { soldSqFt: newSoldSqFt, status: newSoldSqFt >= Number(plot.totalSqFt) ? 'SOLD' : 'PARTIAL' },
+          })
+
+          if (listingId && plot.listingId !== listingId) throw new Error('All selections must belong to the same listing')
+          listingId = plot.listingId
           totalSqFt += sqFt
           plotIds.push(sel.plotId)
 
