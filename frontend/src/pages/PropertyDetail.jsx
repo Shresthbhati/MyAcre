@@ -5,10 +5,11 @@ import PlotGridMap from '../components/browse/PlotGridMap'
 import PlotPicker from '../components/browse/PlotPicker'
 import ValuationChart from '../components/browse/ValuationChart'
 import SqFtBar from '../components/browse/SqFtBar'
+import PropertyPassport from '../components/browse/PropertyPassport'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
-import { txUrl, addressUrl } from '../lib/chain'
+import { txUrl } from '../lib/chain'
 
 export default function PropertyDetail() {
   const { id } = useParams()
@@ -16,6 +17,7 @@ export default function PropertyDetail() {
 
   const [listing, setListing] = useState(null)
   const [valuation, setValuation] = useState(null)
+  const [passport, setPassport] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error | notfound
   const [me, setMe] = useState(null)
 
@@ -45,6 +47,7 @@ export default function PropertyDetail() {
       })
       .catch(() => setStatus((s) => (s === 'loading' ? 'notfound' : 'error')))
     api.getValuation(id).then(setValuation).catch(() => {})
+    api.getPassport(id).then(setPassport).catch(() => {})
   }
 
   useEffect(() => {
@@ -194,7 +197,9 @@ export default function PropertyDetail() {
     <PageShell>
       <section className="py-16 md:py-20">
         <div className="container-fluid">
-          <p className="mono-label mb-4">{listing.city}</p>
+          <p className="mono-label mb-4">
+            {listing.city} · {listing.assetId}
+          </p>
           <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="font-display text-4xl italic md:text-5xl">{listing.title}</h1>
@@ -274,38 +279,7 @@ export default function PropertyDetail() {
                 </div>
               )}
 
-              <div className="glass rounded-2xl p-6">
-                <p className="mono-label mb-3">Blockchain proof</p>
-                {listing.onChainTxHash ? (
-                  <div className="font-mono text-[11px] text-silver-low">
-                    <p className="text-white">Tokenized on Polygon Amoy testnet.</p>
-                    <a
-                      href={txUrl(listing.onChainTxHash)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-block text-white underline underline-offset-2"
-                    >
-                      View tokenization tx on PolygonScan ↗
-                    </a>
-                    {listing.contractAddress && (
-                      <a
-                        href={addressUrl(listing.contractAddress)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1 block text-silver-low underline underline-offset-2 hover:text-white"
-                      >
-                        Contract {listing.contractAddress.slice(0, 6)}…{listing.contractAddress.slice(-4)} ↗
-                      </a>
-                    )}
-                  </div>
-                ) : (
-                  <p className="font-mono text-[11px] text-silver-low">
-                    Not yet tokenized on-chain — this property's off-chain record in MyAcre's database is
-                    authoritative for now. Either blockchain settlement isn't configured for this deployment, or the
-                    on-chain call hasn't completed.
-                  </p>
-                )}
-              </div>
+              <PropertyPassport passport={passport} />
             </div>
 
             <div className="glass flex flex-col gap-6 rounded-2xl p-6 md:p-8">

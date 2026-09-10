@@ -7,7 +7,7 @@ export default function Footer() {
         <div>
           <p className="font-mono text-sm font-bold uppercase tracking-[0.3em] text-white">MyAcre</p>
           <p className="mt-3 max-w-xs font-sans text-sm font-light text-silver-low">
-            Fractional real estate ownership, verified on-chain. Built for Smart India Hackathon 2026.
+            Fractional real estate ownership, verified on-chain.
           </p>
         </div>
 
@@ -31,7 +31,7 @@ export default function Footer() {
           <div>
             <p className="mono-label">Info</p>
             <div className="mt-4 flex flex-col gap-2">
-              <span className="text-sm text-silver-low">SIH26204 · CodeCrafters</span>
+              <span className="text-sm text-silver-low">Team CodeCrafters</span>
               <span className="text-sm text-silver-low">Built on Polygon</span>
             </div>
           </div>

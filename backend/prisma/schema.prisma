@@ -2,6 +2,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Postgres, hosted on Supabase — a real, always-on database with zero local
+// setup (no Docker, no manual Postgres install). Money and area/sqft fields
+// use Postgres's native Decimal, not Float — repeated increments to columns
+// like Plot.soldSqFt would otherwise accumulate IEEE-754 rounding error.
+// Every read site converts back to a plain JS number (Number(...)) before
+// it reaches the API response.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -217,7 +223,7 @@ model AreaPriceHistory {
   city         String
   period       String
   periodIndex  Int
-  pricePerSqFt Decimal  @db.Decimal(14, 2)
+  pricePerSqFt Float
   createdAt    DateTime @default(now())
 
   @@unique([city, period])

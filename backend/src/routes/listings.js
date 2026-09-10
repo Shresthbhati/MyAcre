@@ -10,6 +10,7 @@ const { findDuplicate, normalizeDeed } = require('../lib/duplicateDetection')
 const { buildValuation, classifyValuation } = require('../lib/valuation')
 const { sha256, sanitizeFilename, validateDocument, MAX_SIZE_BYTES } = require('../lib/documentValidation')
 const blockchain = require('../lib/blockchain')
+const { findDuplicateAsset } = require('../lib/assetIdentity')
 
 const router = Router()
 
@@ -37,6 +38,14 @@ async function assertListingOwnerOrAdmin(req, res, listingId) {
   return dbUser
 }
 
+// Stable, human-readable asset code derived from existing fields — not a
+// new identity system, just a display label. MYA-IN-<CITY3>-<idsuffix>.
+function assetIdFor(listing) {
+  const cityCode = (listing.city || 'XX').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase().padEnd(3, 'X')
+  const suffix = listing.id.replace(/-/g, '').slice(0, 6).toUpperCase()
+  return `MYA-IN-${cityCode}-${suffix}`
+}
+
 function serializeListing(listing) {
   const sellablePlots = listing.plots.filter((p) => p.sellable)
   const sellableSqFt = sellablePlots.reduce((sum, p) => sum + Number(p.totalSqFt), 0)
@@ -44,6 +53,7 @@ function serializeListing(listing) {
 
   return {
     id: listing.id,
+    assetId: assetIdFor(listing),
     title: listing.title,
     description: listing.description,
     city: listing.city,
@@ -118,6 +128,111 @@ router.get('/:id/valuation', async (req, res) => {
   })
 })
 
+// Property Passport: aggregates verification, geometry, valuation, and
+// blockchain proof into one trust dossier. Pulls from data that already
+// exists on the listing — no new tables. Intentionally coarse checks
+// (deed-registry match, plot-geometry consistency) since MyAcre has no real
+// government registry integration; see docs/LEGAL_MODEL.md.
+router.get('/:id/passport', async (req, res) => {
+  const listing = await prisma.listing.findUnique({
+    where: { id: req.params.id },
+    include: {
+      plots: { select: { sellable: true, totalSqFt: true, soldSqFt: true, status: true } },
+      transactions: { orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, sqFt: true, amount: true, status: true, txHash: true, createdAt: true } },
+    },
+  })
+  if (!listing) return res.status(404).json({ error: 'Listing not found' })
+
+  const history = await prisma.areaPriceHistory.findMany({ where: { city: listing.city }, orderBy: { periodIndex: 'asc' } })
+  const valuation = buildValuation(history)
+  const listingPricePerSqFt = Number(listing.pricePerSqFt)
+  const deviationPercent = valuation.currentAreaAvg > 0
+    ? Number((((listingPricePerSqFt - valuation.currentAreaAvg) / valuation.currentAreaAvg) * 100).toFixed(1))
+    : 0
+
+  const { verified: titleVerified, reason: titleReason } = verifyTitle(listing.titleDeedNumber)
+  const geometryOk = listing.plots.length === listing.gridRows * listing.gridCols
+
+  // Trust score is computed only from verification checks (title, geometry,
+  // valuation) — signals about whether the *asset* is what it claims to be.
+  // Blockchain settlement is a separate ownership/status fact: an unsold,
+  // fully-verified listing that simply hasn't been tokenized yet (or is
+  // running with no blockchain configured) shouldn't read as "low trust".
+  // It's still surfaced in `checks` for the UI, just excluded from the average.
+  const verificationChecks = [
+    {
+      check: 'TITLE',
+      status: listing.titleStatus,
+      provider: 'MockRegistryProvider (DEMO)',
+      confidence: titleVerified ? 100 : 0,
+      evidenceRef: listing.titleDeedNumber,
+      explanation: titleVerified ? 'Deed number matched the demo registry sample set.' : titleReason,
+    },
+    {
+      check: 'GEOMETRY',
+      status: geometryOk ? 'VERIFIED' : 'FLAGGED',
+      provider: 'DemoTokenizationGrid',
+      confidence: geometryOk ? 92 : 40,
+      evidenceRef: `${listing.gridRows}x${listing.gridCols} grid`,
+      explanation: geometryOk
+        ? 'Grid cell count matches declared rows × cols; this is a tokenization grid, not a surveyed parcel boundary.'
+        : 'Grid cell count does not match declared dimensions.',
+    },
+    {
+      check: 'VALUATION',
+      status: Math.abs(deviationPercent) <= 15 ? 'VERIFIED' : 'FLAGGED',
+      provider: 'LinearRegressionTrendModel (DEMO)',
+      confidence: Math.max(0, 100 - Math.abs(deviationPercent) * 2),
+      evidenceRef: `${history.length} historical price points for ${listing.city}`,
+      explanation: `Listing price is ${deviationPercent >= 0 ? '+' : ''}${deviationPercent}% vs. the model's current-area average of ${valuation.currentAreaAvg}/sqft.`,
+    },
+  ]
+
+  const blockchainCheck = {
+    check: 'BLOCKCHAIN_SETTLEMENT',
+    status: listing.onChainTxHash ? 'VERIFIED' : 'PENDING',
+    provider: 'PropertyToken.sol (Polygon Amoy)',
+    confidence: listing.onChainTxHash ? 100 : 0,
+    evidenceRef: listing.onChainTxHash || null,
+    explanation: listing.onChainTxHash
+      ? 'Property was tokenized on-chain; supply cap enforced by contract.'
+      : 'Not yet tokenized on-chain (blockchain not configured or tokenization pending) — this does not affect the trust score, which reflects asset verification, not settlement progress.',
+  }
+
+  const checks = [...verificationChecks, blockchainCheck]
+  const trustScore = Math.round(verificationChecks.reduce((sum, c) => sum + c.confidence, 0) / verificationChecks.length)
+
+  res.json({
+    assetId: assetIdFor(listing),
+    summary: {
+      title: listing.title,
+      city: listing.city,
+      latitude: listing.latitude,
+      longitude: listing.longitude,
+      totalValue: Number(listing.totalValue),
+      areaSqFt: Number(listing.areaSqFt),
+      titleStatus: listing.titleStatus,
+      createdAt: listing.createdAt,
+    },
+    trustScore,
+    checks,
+    valuation: { ...valuation, listingPricePerSqFt, deviationPercent },
+    geometry: {
+      type: 'DEMO_TOKENIZATION_GRID',
+      note: 'Equal-area grid over the listing coordinates for fractional sale — not a legally surveyed parcel boundary.',
+      gridRows: listing.gridRows,
+      gridCols: listing.gridCols,
+      excludedCells: listing.plots.filter((p) => !p.sellable).length,
+    },
+    ownership: {
+      contractAddress: listing.contractAddress,
+      onChainTxHash: listing.onChainTxHash,
+      tokenized: Boolean(listing.onChainTxHash),
+    },
+    recentTransactions: listing.transactions.map((t) => ({ ...t, sqFt: Number(t.sqFt), amount: Number(t.amount) })),
+  })
+})
+
 // Sell & Tokenize: list a property, run it through the mock oracle, and — if
 // verified — generate the grid of purchasable plots (one per chunk).
 // `excludedCells` marks grid cells that overlap roads/common area — they're
@@ -147,6 +262,27 @@ router.post('/', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Missing required listing fields' })
   }
 
+  // Two complementary checks, run in order from cheapest/most-certain to
+  // broadest: first "did this same owner already list this exact asset"
+  // (tight coordinate tolerance, no area check — a re-submission mistake),
+  // then "does this match ANY existing listing, including other owners'"
+  // (looser radius + area tolerance, catches someone re-listing a property
+  // that isn't theirs). Either one firing blocks creation before any write.
+  const ownerDuplicate = await findDuplicateAsset(prisma, {
+    ownerId: owner.id,
+    titleDeedNumber,
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+  })
+  if (ownerDuplicate) {
+    return res.status(409).json({
+      error: `You already have a listing ("${ownerDuplicate.existingListingTitle}") matching this property on ${ownerDuplicate.matchedOn.join(' and ')}.`,
+      code: 'DUPLICATE_ASSET_DETECTED',
+      confidence: 'exact',
+      matchedListingId: ownerDuplicate.existingListingId,
+    })
+  }
+
   const excludedSet = new Set(excludedCells.map(({ row, col }) => `${row}-${col}`))
   const totalCells = Number(gridRows) * Number(gridCols)
   const sellableCount = totalCells - excludedSet.size
@@ -163,13 +299,13 @@ router.post('/', requireAuth, async (req, res) => {
     where: { titleStatus: { not: 'REJECTED' } },
     select: { id: true, titleDeedNumber: true, city: true, latitude: true, longitude: true, areaSqFt: true },
   })
-  const duplicate = findDuplicate(candidateForDuplicateCheck, existingListings)
-  if (duplicate) {
+  const crossOwnerDuplicate = findDuplicate(candidateForDuplicateCheck, existingListings)
+  if (crossOwnerDuplicate) {
     return res.status(409).json({
-      error: `Duplicate property detected: ${duplicate.reason}`,
+      error: `Duplicate property detected: ${crossOwnerDuplicate.reason}`,
       code: 'DUPLICATE_ASSET_DETECTED',
-      confidence: duplicate.confidence,
-      matchedListingId: duplicate.matchedListingId,
+      confidence: crossOwnerDuplicate.confidence,
+      matchedListingId: crossOwnerDuplicate.matchedListingId,
     })
   }
 
@@ -291,7 +427,7 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
 
   // Read the listing outside the transaction — its price doesn't change
   // concurrently, and every round-trip inside the transaction eats into
-  // Prisma's timeout budget against a remote (Neon) database.
+  // Prisma's timeout budget against a remote database.
   const priceListing = await prisma.listing.findUnique({ where: { id: req.params.id } })
   if (!priceListing) return res.status(404).json({ error: 'Listing not found' })
   if (priceListing.frozen) {
@@ -330,7 +466,11 @@ router.post('/:id/buy', requireAuth, async (req, res) => {
           // Atomic guarded update: only succeeds if enough sqft is still
           // available in this plot. Postgres locks the row for the
           // transaction's duration, so a concurrent buyer sees the updated
-          // soldSqFt (or gets blocked) — no double-sale.
+          // soldSqFt (or gets blocked) — no double-sale. (A plain
+          // read-then-write here would NOT be safe on Postgres — two
+          // concurrent transactions could both read stale soldSqFt before
+          // either commits. This single guarded statement is what closes
+          // that race.)
           const rows = await tx.$queryRaw`
             UPDATE plots
             SET "soldSqFt" = "soldSqFt" + ${sqFt},
