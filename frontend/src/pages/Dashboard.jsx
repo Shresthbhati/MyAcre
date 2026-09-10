@@ -121,6 +121,8 @@ export default function Dashboard() {
                         >
                           on-chain ↗
                         </a>
+                      ) : t.blockchainStatus === 'RECONCILIATION_REQUIRED' ? (
+                        <span className="text-amber-400">reconciliation needed</span>
                       ) : (
                         <span className="text-silver-low/40">off-chain</span>
                       )}

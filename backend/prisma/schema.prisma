@@ -2,9 +2,20 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Postgres, hosted on Supabase — a real, always-on database with zero local
+// setup (no Docker, no manual Postgres install). Money and area/sqft fields
+// use Postgres's native Decimal, not Float — repeated increments to columns
+// like Plot.soldSqFt would otherwise accumulate IEEE-754 rounding error.
+// Every read site converts back to a plain JS number (Number(...)) before
+// it reaches the API response.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
 }
 
 enum KycStatus {
@@ -26,6 +37,17 @@ enum TransactionStatus {
   FAILED
 }
 
+// Tracks whether a purchase's on-chain settlement actually happened, kept
+// separate from TransactionStatus: a transaction can be COMPLETED off-chain
+// (payment + ownership recorded in Postgres) while its blockchain leg is
+// unconfirmed — the app must never conflate the two. See
+// backend/src/lib/blockchain.js#classifySettlement.
+enum BlockchainStatus {
+  NOT_CONFIGURED
+  CONFIRMED
+  RECONCILIATION_REQUIRED
+}
+
 enum PlotStatus {
   AVAILABLE
   PARTIAL
@@ -34,21 +56,23 @@ enum PlotStatus {
 }
 
 model User {
-  id            String    @id @default(uuid())
-  firebaseUid   String    @unique
-  email         String    @unique
-  name          String?
-  kycStatus     KycStatus @default(UNVERIFIED)
-  kycPan        String?
-  walletAddress String?
+  id                        String    @id @default(uuid())
+  firebaseUid               String    @unique
+  email                     String    @unique
+  name                      String?
+  role                      UserRole  @default(USER)
+  kycStatus                 KycStatus @default(UNVERIFIED)
+  kycPan                    String?
+  walletAddress             String?
   walletPrivateKeyEncrypted String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
   listings     Listing[]     @relation("ListingOwner")
   holdings     Holding[]
   plotHoldings PlotHolding[]
   transactions Transaction[] @relation("TransactionBuyer")
+  documents    Document[]
 
   @@map("users")
 }
@@ -64,11 +88,11 @@ model Listing {
   longitude            Float
   titleDeedNumber      String
   totalValue           Decimal     @db.Decimal(14, 2)
-  areaSqFt             Float
+  areaSqFt             Decimal     @db.Decimal(14, 2)
   pricePerSqFt         Decimal     @db.Decimal(14, 2)
   totalTokens          Int
   pricePerToken        Decimal     @db.Decimal(14, 2)
-  sqFtPerToken          Float
+  sqFtPerToken         Decimal     @db.Decimal(14, 2)
   gridRows             Int         @default(4)
   gridCols             Int         @default(5)
   imageSeed            String
@@ -76,14 +100,43 @@ model Listing {
   titleRejectionReason String?
   contractAddress      String?
   onChainTxHash        String?
+  // Admin kill switch, independent of titleStatus: a listing can be VERIFIED
+  // (its title checked out) and still get frozen later — evidence turned out
+  // to be disputed, a legal hold, fraud report, etc. Frozen blocks new
+  // purchases without touching the verification record itself.
+  frozen               Boolean     @default(false)
+  frozenReason         String?
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
   holdings     Holding[]
   plots        Plot[]
   transactions Transaction[]
+  documents    Document[]
 
   @@map("listings")
+}
+
+// Evidence file attached to a listing (deed scan, survey, etc). The hash is
+// computed server-side from the actual uploaded bytes at upload time — it's
+// what lets a later re-check confirm the stored file hasn't been swapped or
+// altered. No versioning yet: each upload is its own row, nothing is
+// overwritten in place.
+model Document {
+  id          String   @id @default(uuid())
+  listingId   String
+  listing     Listing  @relation(fields: [listingId], references: [id])
+  uploaderId  String
+  uploader    User     @relation(fields: [uploaderId], references: [id])
+  filename    String
+  mimeType    String
+  size        Int
+  sha256      String
+  storagePath String
+  createdAt   DateTime @default(now())
+
+  @@index([listingId])
+  @@map("documents")
 }
 
 // One row per grid cell shown on the map. `sellable=false` (status EXCLUDED)
@@ -96,8 +149,8 @@ model Plot {
   row       Int
   col       Int
   sellable  Boolean    @default(true)
-  totalSqFt Float
-  soldSqFt  Float      @default(0)
+  totalSqFt Decimal    @db.Decimal(14, 2)
+  soldSqFt  Decimal    @default(0) @db.Decimal(14, 2)
   status    PlotStatus @default(AVAILABLE)
   updatedAt DateTime   @updatedAt
 
@@ -116,7 +169,7 @@ model PlotHolding {
   plot      Plot     @relation(fields: [plotId], references: [id])
   ownerId   String
   owner     User     @relation(fields: [ownerId], references: [id])
-  sqFt      Float
+  sqFt      Decimal  @db.Decimal(14, 2)
   updatedAt DateTime @updatedAt
 
   @@unique([plotId, ownerId])
@@ -131,7 +184,7 @@ model Holding {
   listing   Listing  @relation(fields: [listingId], references: [id])
   ownerId   String
   owner     User     @relation(fields: [ownerId], references: [id])
-  sqFtOwned Float    @default(0)
+  sqFtOwned Decimal  @default(0) @db.Decimal(14, 2)
   plotCount Int      @default(0)
   updatedAt DateTime @updatedAt
 
@@ -140,19 +193,25 @@ model Holding {
 }
 
 model Transaction {
-  id            String            @id @default(uuid())
-  listingId     String
-  listing       Listing           @relation(fields: [listingId], references: [id])
-  buyerId       String
-  buyer         User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
-  sqFt          Float
-  plotIds       String[]
-  amount        Decimal           @db.Decimal(14, 2)
-  status        TransactionStatus @default(PENDING)
-  paymentMethod String?
-  txHash        String?
-  createdAt     DateTime          @default(now())
+  id               String            @id @default(uuid())
+  listingId        String
+  listing          Listing           @relation(fields: [listingId], references: [id])
+  buyerId          String
+  buyer            User              @relation("TransactionBuyer", fields: [buyerId], references: [id])
+  sqFt             Decimal           @db.Decimal(14, 2)
+  plotIds          String[]
+  amount           Decimal           @db.Decimal(14, 2)
+  status           TransactionStatus @default(PENDING)
+  paymentMethod    String?
+  txHash           String?
+  blockchainStatus BlockchainStatus  @default(NOT_CONFIGURED)
+  idempotencyKey   String?
+  createdAt        DateTime          @default(now())
 
+  // Postgres treats each NULL as distinct, so ordinary buys (no header sent)
+  // are never deduplicated against each other — only repeats of the same
+  // client-supplied key for the same buyer are.
+  @@unique([buyerId, idempotencyKey])
   @@map("transactions")
 }
 
@@ -164,7 +223,7 @@ model AreaPriceHistory {
   city         String
   period       String
   periodIndex  Int
-  pricePerSqFt Decimal  @db.Decimal(14, 2)
+  pricePerSqFt Float
   createdAt    DateTime @default(now())
 
   @@unique([city, period])

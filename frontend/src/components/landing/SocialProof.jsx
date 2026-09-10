@@ -11,7 +11,7 @@ export default function SocialProof() {
         </Reveal>
         <Reveal delay={150} className="flex flex-col items-center gap-3">
           <AvatarStack />
-          <p className="mono-label">Trusted by 2,400+ early investors</p>
+          <p className="mono-label">Beta cohort opening in select cities</p>
         </Reveal>
       </div>
     </section>

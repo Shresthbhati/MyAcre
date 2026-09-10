@@ -1,21 +1,30 @@
 # backend
 
-Node.js/Express API + Prisma/PostgreSQL. Verifies Firebase ID tokens (Firebase Admin SDK) for authenticated routes; the frontend still owns registration/login via Firebase Auth — this API only stores off-chain data (KYC status, listings, holdings, transactions) keyed by Firebase UID.
+Node.js/Express API + Prisma/Postgres (hosted on Supabase). Verifies Firebase ID tokens (Firebase Admin SDK) for authenticated routes; the frontend still owns registration/login via Firebase Auth — this API only stores off-chain data (KYC status, listings, holdings, transactions) keyed by Firebase UID.
 
 ## Setup
 
 ```bash
 cd backend
 npm install
-cp .env.example .env   # fill in DATABASE_URL (Neon) and FIREBASE_SERVICE_ACCOUNT_JSON
+cp .env.example .env   # fill in DATABASE_URL (Supabase pooler string) + FIREBASE_SERVICE_ACCOUNT_JSON
 npm run prisma:migrate       # creates tables from prisma/schema.prisma
+node prisma/seed.js          # optional: sample properties
 npm run dev                  # starts on http://localhost:4000
 ```
+
+Get `DATABASE_URL` from Supabase: dashboard → your project → **Connect** → **Transaction pooler** connection string. Use the pooler (not the direct connection) — it's IPv4-reachable and works from anywhere, whereas the direct connection is IPv6-only on most Supabase plans.
+
+**If you're pointing at the project already provisioned for this repo** (schema applied directly via the Supabase MCP tools rather than through a local `prisma migrate`), tell Prisma that migration is already applied instead of re-running it:
+```bash
+npx prisma migrate resolve --applied 20260909193000_init_postgres
+```
+A brand-new/empty Supabase project doesn't need this — `npm run prisma:migrate` applies it normally.
 
 ## Endpoints
 
 - `GET /api/health` — reports whether DB/Firebase Admin are configured
-- `POST /api/users/sync` — upsert the current Firebase user into Postgres (call after login/register)
+- `POST /api/users/sync` — upsert the current Firebase user into the database (call after login/register)
 - `GET /api/users/me` — current user's profile + KYC status
 - `GET /api/users/me/holdings` — current user's sqft holdings across all listings
 - `GET /api/users/me/transactions` — current user's transaction history
@@ -29,6 +38,4 @@ npm run dev                  # starts on http://localhost:4000
 
 All routes except `/api/health`, `GET /api/listings`, `GET /api/listings/:id`, and the valuation endpoint require `Authorization: Bearer <firebase-id-token>`.
 
-**Neon/Prisma gotcha**: the buy endpoint's transaction does several round-trips (guarded raw `UPDATE`, holding upserts, transaction record). Against Neon's pooled connection without `pgbouncer=true` (or against a connection with a tight/default Prisma transaction timeout), this can fail with `Transaction not found` once round-trip latency adds up — see `.env.example` and the `{ timeout: 15000, maxWait: 10000 }` options passed to `prisma.$transaction` in `src/routes/listings.js`.
-
-**Network gotcha**: some networks block outbound TCP on port 5432 (Postgres's usual port) while leaving normal HTTPS (443) open — this happened on the dev machine mid-project. `src/lib/prisma.js` connects via `@neondatabase/serverless` + `@prisma/adapter-neon`, which tunnels the connection over a WebSocket on 443 instead, sidestepping that restriction entirely (and making the app resilient if the same thing happens at a demo venue). `DATABASE_URL` stays the same either way — no config changes needed for this, it's purely in how `src/lib/prisma.js` constructs the client. `prisma migrate`/`prisma db seed` still connect directly (they don't go through this adapter), so a fresh clone still needs raw TCP/5432 open once, to run migrations.
+**Concurrency note**: the buy endpoint's transaction does several round-trips (guarded raw `UPDATE`, holding upserts, transaction record). Against Supabase's pooled connection without `pgbouncer=true` (or a tight/default Prisma transaction timeout), this can fail with `Transaction not found` once round-trip latency adds up — see `.env.example` and the `{ timeout: 15000, maxWait: 10000 }` options passed to `prisma.$transaction` in `src/routes/listings.js`. The double-sale guard itself is a single atomic `UPDATE ... WHERE ("totalSqFt" - "soldSqFt") >= sqFt` — Postgres locks that row for the transaction's duration, so a concurrent buyer either sees the updated `soldSqFt` or is blocked, never both succeeding.

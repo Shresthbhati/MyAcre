@@ -49,6 +49,16 @@ async function buyChunk(listingId, buyerAddress, sqFt) {
   return receipt.hash
 }
 
+// Turns "did the on-chain call actually happen" into the one honest status
+// the rest of the app is allowed to show a user. A missing/failed txHash
+// after an off-chain purchase already succeeded is NOT the same thing as
+// "not configured" — it means the DB and chain have diverged and a human
+// (or the reconciliation flow) needs to know that, not silently see success.
+function classifySettlement({ isConfigured, txHash }) {
+  if (!isConfigured) return 'NOT_CONFIGURED'
+  return txHash ? 'CONFIRMED' : 'RECONCILIATION_REQUIRED'
+}
+
 module.exports = {
   isBlockchainConfigured,
   contractAddress: CONTRACT_ADDRESS,
@@ -56,4 +66,5 @@ module.exports = {
   generateWallet,
   tokenizeProperty,
   buyChunk,
+  classifySettlement,
 }

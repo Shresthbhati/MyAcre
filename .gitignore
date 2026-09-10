@@ -14,9 +14,16 @@ contracts/artifacts/
 contracts/cache/
 contracts/typechain-types/
 
+# Uploaded evidence documents (local disk storage — demo only)
+backend/uploads/
+
 # Env files
 .env
 *.local
+
+# Local SQLite database files
+*.db
+*.db-journal
 
 # Logs
 *.log

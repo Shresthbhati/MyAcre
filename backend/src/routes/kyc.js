@@ -30,7 +30,8 @@ router.post('/verify', requireAuth, async (req, res) => {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'User not synced yet — call POST /api/users/sync first' })
     }
-    res.status(500).json({ error: 'KYC check failed', detail: err.message })
+    console.error('KYC check failed:', err)
+    res.status(500).json({ error: 'KYC check failed' })
   }
 })
 

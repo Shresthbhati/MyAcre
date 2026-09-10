@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import PageShell from '../components/layout/PageShell'
 import PlotGridMap from '../components/browse/PlotGridMap'
 import PlotPicker from '../components/browse/PlotPicker'
 import ValuationChart from '../components/browse/ValuationChart'
 import SqFtBar from '../components/browse/SqFtBar'
+import PropertyPassport from '../components/browse/PropertyPassport'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatINR } from '../lib/format'
@@ -16,6 +17,7 @@ export default function PropertyDetail() {
 
   const [listing, setListing] = useState(null)
   const [valuation, setValuation] = useState(null)
+  const [passport, setPassport] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error | notfound
   const [me, setMe] = useState(null)
 
@@ -26,6 +28,15 @@ export default function PropertyDetail() {
   const [buyStatus, setBuyStatus] = useState('idle') // idle | processing | success | error
   const [buyMessage, setBuyMessage] = useState('')
   const [buyTxHash, setBuyTxHash] = useState(null)
+  // Stays the same across retries of the same cart (e.g. re-clicking Buy
+  // after a network error means "did that actually go through?", not "buy
+  // again") so the backend can dedupe them; a fresh key is drawn once the
+  // cart itself changes or the purchase finishes.
+  const idempotencyKeyRef = useRef(null)
+
+  const [documents, setDocuments] = useState([])
+  const [docUploadStatus, setDocUploadStatus] = useState('idle') // idle | uploading | error
+  const [docUploadError, setDocUploadError] = useState('')
 
   const loadListing = () => {
     api
@@ -36,6 +47,7 @@ export default function PropertyDetail() {
       })
       .catch(() => setStatus((s) => (s === 'loading' ? 'notfound' : 'error')))
     api.getValuation(id).then(setValuation).catch(() => {})
+    api.getPassport(id).then(setPassport).catch(() => {})
   }
 
   useEffect(() => {
@@ -54,6 +66,49 @@ export default function PropertyDetail() {
       .catch(() => setMe(null))
   }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const canManageDocuments = listing && me && (me.id === listing.ownerId || me.role === 'ADMIN')
+
+  useEffect(() => {
+    if (!canManageDocuments) {
+      setDocuments([])
+      return
+    }
+    getToken()
+      .then((token) => api.getDocuments(token, listing.id))
+      .then(setDocuments)
+      .catch(() => setDocuments([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageDocuments, listing?.id])
+
+  const handleUploadDocument = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setDocUploadStatus('uploading')
+    setDocUploadError('')
+    try {
+      const token = await getToken()
+      const doc = await api.uploadDocument(token, listing.id, file)
+      setDocuments((prev) => [doc, ...prev])
+      setDocUploadStatus('idle')
+    } catch (err) {
+      setDocUploadStatus('error')
+      setDocUploadError(err.message)
+    }
+  }
+
+  const handleToggleFreeze = async () => {
+    const token = await getToken()
+    if (listing.frozen) {
+      await api.unfreezeListing(token, listing.id)
+    } else {
+      const reason = window.prompt('Reason for freezing this property?')
+      if (!reason) return
+      await api.freezeListing(token, listing.id, reason)
+    }
+    loadListing()
+  }
+
   const cartList = useMemo(() => Array.from(cart.entries()).map(([plotId, v]) => ({ plotId, ...v })), [cart])
   const totalSqFt = cartList.reduce((sum, c) => sum + c.sqFt, 0)
   const totalPrice = listing ? totalSqFt * Number(listing.pricePerSqFt) : 0
@@ -68,6 +123,7 @@ export default function PropertyDetail() {
       return next
     })
     setActivePlot(null)
+    idempotencyKeyRef.current = null
   }
 
   const removeFromCart = (plotId) => {
@@ -76,6 +132,7 @@ export default function PropertyDetail() {
       next.delete(plotId)
       return next
     })
+    idempotencyKeyRef.current = null
   }
 
   const handleBuy = async () => {
@@ -83,15 +140,23 @@ export default function PropertyDetail() {
     setBuyStatus('processing')
     setBuyMessage('')
     setBuyTxHash(null)
+    if (!idempotencyKeyRef.current) idempotencyKeyRef.current = crypto.randomUUID()
     try {
       const token = await getToken()
       const result = await api.buyPlots(token, listing.id, {
         selections: cartList.map((c) => ({ plotId: c.plotId, sqFt: c.sqFt })),
         paymentMethod,
         simulatePaymentFailure: simulateFailure,
+        idempotencyKey: idempotencyKeyRef.current,
       })
+      idempotencyKeyRef.current = null
       setBuyStatus('success')
-      setBuyMessage(`Purchased ${totalSqFt.toFixed(0)} sqft for ${formatINR(totalPrice)}.`)
+      const purchaseLine = `Purchased ${totalSqFt.toFixed(0)} sqft for ${formatINR(totalPrice)}.`
+      setBuyMessage(
+        result.blockchainStatus === 'RECONCILIATION_REQUIRED'
+          ? `${purchaseLine} Ownership is recorded — blockchain settlement failed and needs reconciliation before it's on-chain.`
+          : purchaseLine,
+      )
       setBuyTxHash(result.txHash || null)
       setCart(new Map())
       loadListing()
@@ -132,7 +197,9 @@ export default function PropertyDetail() {
     <PageShell>
       <section className="py-16 md:py-20">
         <div className="container-fluid">
-          <p className="mono-label mb-4">{listing.city}</p>
+          <p className="mono-label mb-4">
+            {listing.city} · {listing.assetId}
+          </p>
           <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="font-display text-4xl italic md:text-5xl">{listing.title}</h1>
@@ -150,6 +217,52 @@ export default function PropertyDetail() {
             </div>
           </div>
 
+          {listing.frozen && (
+            <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 font-mono text-xs text-amber-200">
+              This property is frozen — purchases are blocked. {listing.frozenReason}
+            </div>
+          )}
+
+          {me?.role === 'ADMIN' && (
+            <div className="mb-6 flex items-center justify-between rounded-xl border border-dashed border-silver-low/30 p-3 font-mono text-[11px]">
+              <span className="text-silver-low">Admin controls</span>
+              <button type="button" onClick={handleToggleFreeze} className="btn-ghost !px-3 !py-1 text-[11px]">
+                {listing.frozen ? 'Unfreeze property' : 'Freeze property'}
+              </button>
+            </div>
+          )}
+
+          {canManageDocuments && (
+            <div className="mb-6 rounded-xl border border-dashed border-silver-low/30 p-4 font-mono text-[11px]">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-silver-low">
+                  Evidence documents <span className="text-silver-low/60">(private — owner &amp; admin only)</span>
+                </span>
+                <label className="btn-ghost cursor-pointer !px-3 !py-1 text-[11px]">
+                  {docUploadStatus === 'uploading' ? 'Uploading…' : 'Upload PDF/PNG/JPEG'}
+                  <input type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleUploadDocument} />
+                </label>
+              </div>
+              {docUploadStatus === 'error' && <p className="mb-2 text-red-400">{docUploadError}</p>}
+              {documents.length === 0 ? (
+                <p className="text-silver-low/60">No documents uploaded yet.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {documents.map((doc) => (
+                    <li key={doc.id} className="flex items-center justify-between text-silver-low">
+                      <span>
+                        {doc.filename} · {(doc.size / 1024).toFixed(0)}KB
+                      </span>
+                      <span className="text-silver-low/60" title={doc.sha256}>
+                        sha256:{doc.sha256.slice(0, 10)}…
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <div className="glass mb-10 rounded-2xl p-5">
             <SqFtBar soldSqFt={listing.soldSqFt} availableSqFt={listing.availableSqFt} excludedSqFt={listing.excludedSqFt} />
           </div>
@@ -165,6 +278,8 @@ export default function PropertyDetail() {
                   <ValuationChart valuation={valuation} />
                 </div>
               )}
+
+              <PropertyPassport passport={passport} />
             </div>
 
             <div className="glass flex flex-col gap-6 rounded-2xl p-6 md:p-8">
@@ -301,10 +416,14 @@ export default function PropertyDetail() {
                   <button
                     type="button"
                     onClick={handleBuy}
-                    disabled={cartList.length === 0 || buyStatus === 'processing'}
+                    disabled={cartList.length === 0 || buyStatus === 'processing' || listing.frozen}
                     className="btn-silver disabled:opacity-50"
                   >
-                    {buyStatus === 'processing' ? 'Processing…' : `Buy ${totalSqFt > 0 ? totalSqFt.toFixed(0) + ' sqft' : ''}`}
+                    {listing.frozen
+                      ? 'Property frozen'
+                      : buyStatus === 'processing'
+                        ? 'Processing…'
+                        : `Buy ${totalSqFt > 0 ? totalSqFt.toFixed(0) + ' sqft' : ''}`}
                   </button>
                 </>
               )}

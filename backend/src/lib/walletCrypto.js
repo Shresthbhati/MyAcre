@@ -2,9 +2,16 @@ const crypto = require('crypto')
 
 // Encrypts custodial wallet private keys at rest (AES-256-GCM) so a DB leak
 // alone doesn't expose them. WALLET_ENCRYPTION_KEY is a 32-byte hex string
-// generated once for this deployment — it's an internal secret, not a
-// third-party credential, so we generate a default if one isn't set rather
-// than asking the user for it.
+// generated once for this deployment. Outside DEMO_MODE we fail closed
+// instead of silently falling back to a hardcoded key — a shared default key
+// makes every deployment's wallets decryptable by anyone who reads this file.
+if (!process.env.WALLET_ENCRYPTION_KEY && process.env.DEMO_MODE !== 'true') {
+  throw new Error(
+    'WALLET_ENCRYPTION_KEY is not set. Generate one with: ' +
+      `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` +
+      ' — or set DEMO_MODE=true to use an insecure dev-only key.',
+  )
+}
 const KEY = crypto.createHash('sha256').update(process.env.WALLET_ENCRYPTION_KEY || 'myacre-dev-only-key').digest()
 
 function encrypt(plainText) {
