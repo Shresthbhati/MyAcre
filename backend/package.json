@@ -9,7 +9,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "seed": "node prisma/seed.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test src/**/__tests__/*.test.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -26,6 +26,7 @@
     "ethers": "^6.17.0",
     "express": "^5.2.1",
     "firebase-admin": "^14.3.0",
+    "multer": "^2.3.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {

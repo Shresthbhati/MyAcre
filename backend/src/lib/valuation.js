@@ -20,6 +20,26 @@ function linearRegression(points) {
   return { slope, intercept }
 }
 
+// Buckets how far a listing's price/sqft sits from the trend model's current
+// estimate. Thresholds are an explicit, documented heuristic — not a
+// statistically fitted anomaly detector — so callers must present this as
+// "model estimate" / "indicative", never as certified valuation.
+const NEAR_THRESHOLD_PERCENT = 8
+const HIGH_ANOMALY_THRESHOLD_PERCENT = 30
+
+function classifyValuation(listingPricePerSqFt, modelPricePerSqFt) {
+  if (!modelPricePerSqFt || modelPricePerSqFt <= 0) {
+    return { deviationPercent: null, label: 'NO_MODEL_DATA' }
+  }
+  const deviationPercent = ((listingPricePerSqFt - modelPricePerSqFt) / modelPricePerSqFt) * 100
+  let label
+  if (Math.abs(deviationPercent) <= NEAR_THRESHOLD_PERCENT) label = 'NEAR_MODEL'
+  else if (deviationPercent < 0) label = 'BELOW_MODEL'
+  else if (deviationPercent > HIGH_ANOMALY_THRESHOLD_PERCENT) label = 'HIGH_ANOMALY'
+  else label = 'ABOVE_MODEL'
+  return { deviationPercent: Number(deviationPercent.toFixed(1)), label }
+}
+
 function buildValuation(history) {
   const points = history.map((h) => ({ x: h.periodIndex, y: Number(h.pricePerSqFt) }))
   const { slope, intercept } = linearRegression(points)
@@ -44,4 +64,4 @@ function buildValuation(history) {
   }
 }
 
-module.exports = { linearRegression, buildValuation }
+module.exports = { linearRegression, buildValuation, classifyValuation }

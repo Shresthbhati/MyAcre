@@ -8,7 +8,7 @@ const PAD = { top: 16, right: 16, bottom: 28, left: 16 }
 export default function ValuationChart({ valuation }) {
   const [hoverIndex, setHoverIndex] = useState(null)
 
-  const { history, listingPricePerSqFt, cagrPercent, projectedNextPrice } = valuation
+  const { history, listingPricePerSqFt, cagrPercent, projectedNextPrice, label, deviationPercent } = valuation
 
   const { points, minY, maxY, path } = useMemo(() => {
     if (!history.length) return { points: [], minY: 0, maxY: 1, path: '' }
@@ -55,14 +55,30 @@ export default function ValuationChart({ valuation }) {
 
   const trendLabel = cagrPercent >= 0 ? `+${cagrPercent}% / yr` : `${cagrPercent}% / yr`
 
+  const DEVIATION_COPY = {
+    NEAR_MODEL: { text: 'Near model estimate', className: 'text-silver-low' },
+    BELOW_MODEL: { text: 'Below model estimate', className: 'text-emerald-400' },
+    ABOVE_MODEL: { text: 'Above model estimate', className: 'text-amber-400' },
+    HIGH_ANOMALY: { text: 'Far above model estimate', className: 'text-red-400' },
+  }
+  const deviationBadge = DEVIATION_COPY[label]
+
   return (
     <div>
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <p className="mono-label">Price/sqft trend · {history[0].period}–{history[history.length - 1].period}</p>
         <p className="font-mono text-[11px] text-silver-low">
           Area trend {trendLabel} · next quarter ≈ {formatINR(projectedNextPrice)}
         </p>
       </div>
+
+      {deviationBadge && (
+        <p className={`mb-3 font-mono text-[11px] ${deviationBadge.className}`}>
+          {deviationBadge.text}
+          {deviationPercent != null && ` (${deviationPercent > 0 ? '+' : ''}${deviationPercent}%)`} — this listing's
+          price/sqft vs. the area trend model, an indicative estimate, not a guaranteed valuation.
+        </p>
+      )}
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         className="w-full"

@@ -34,7 +34,8 @@ router.post('/sync', requireAuth, async (req, res) => {
 
     res.json(publicUser(user))
   } catch (err) {
-    res.status(500).json({ error: 'Failed to sync user', detail: err.message })
+    console.error('Failed to sync user:', err)
+    res.status(500).json({ error: 'Failed to sync user' })
   }
 })
 
@@ -53,7 +54,7 @@ router.get('/me/holdings', requireAuth, async (req, res) => {
     include: { listing: true },
     orderBy: { updatedAt: 'desc' },
   })
-  res.json(holdings)
+  res.json(holdings.map((h) => ({ ...h, sqFtOwned: Number(h.sqFtOwned) })))
 })
 
 router.get('/me/transactions', requireAuth, async (req, res) => {
@@ -65,7 +66,7 @@ router.get('/me/transactions', requireAuth, async (req, res) => {
     include: { listing: { select: { title: true, city: true } } },
     orderBy: { createdAt: 'desc' },
   })
-  res.json(transactions)
+  res.json(transactions.map((t) => ({ ...t, sqFt: Number(t.sqFt), amount: Number(t.amount) })))
 })
 
 module.exports = router
